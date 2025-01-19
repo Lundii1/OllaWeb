@@ -1,95 +1,120 @@
-'use client';
+"use client"
 
-import React, { useState, useCallback, useEffect } from 'react';
-import { useChat } from 'ai/react';
-import { InstallDialog } from './components/install-dialog';
+import type React from "react"
+import { useState, useCallback, useEffect } from "react"
+import { useChat } from "ai/react"
+import { InstallDialog } from "./components/install-dialog"
+import { CodeBlock } from "./components/code-block"
 
 export default function Chat() {
-  const [model, setModel] = useState('llama3.2');
+  const [model, setModel] = useState("llama3.2")
   const { messages, input, handleInputChange, handleSubmit } = useChat({
-    api: '/api/chat',
+    api: "/api/chat",
     body: { model },
-  });
-  const [isTyping, setIsTyping] = useState(false);
-  const [isInstalling, setIsInstalling] = useState(false);
-  const [installMessage, setInstallMessage] = useState('');
+  })
+  const [isTyping, setIsTyping] = useState(false)
+  const [isInstalling, setIsInstalling] = useState(false)
+  const [installMessage, setInstallMessage] = useState("")
 
   useEffect(() => {
-    console.log('isInstalling:', isInstalling);
-  }, [isInstalling]);
+    console.log("isInstalling:", isInstalling)
+  }, [isInstalling])
 
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setIsTyping(true);
+    e.preventDefault()
+    setIsTyping(true)
     try {
-      await handleSubmit(e);
+      await handleSubmit(e)
     } catch (error) {
-      console.error('Error submitting message:', error);
+      console.error("Error submitting message:", error)
     } finally {
-      setIsTyping(false);
+      setIsTyping(false)
     }
-  };
+  }
 
   const showPopup = useCallback((message: string) => {
-    alert(message);
-  }, []);
+    alert(message)
+  }, [])
 
-  const installModel = useCallback(async (model: string) => {
-    setIsInstalling(true);
-    setInstallMessage(`Installing model ${model}...`);
-    try {
-      const response = await fetch(`/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ messages: [], model }),
-      });
+  const installModel = useCallback(
+    async (model: string) => {
+      setIsInstalling(true)
+      setInstallMessage(`Installing model ${model}...`)
+      try {
+        const response = await fetch(`/api/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ messages: [], model }),
+        })
 
-      if (!response.body) {
-        setInstallMessage(`No response body received for model ${model}.`);
-        return;
+        if (!response.body) {
+          setInstallMessage(`No response body received for model ${model}.`)
+          return
+        }
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder("utf-8")
+        let done = false
+
+        while (!done) {
+          const { value, done: readerDone } = await reader.read()
+          done = readerDone
+          setInstallMessage((prev) => prev + decoder.decode(value))
+        }
+      } catch (error) {
+        console.error("Error installing model:", error)
+        showPopup(`Error installing model: ${model}`)
+      } finally {
+        setIsInstalling(false)
       }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let done = false;
+    },
+    [showPopup],
+  )
 
-      while (!done) {
-        const { value, done: readerDone } = await reader.read();
-        done = readerDone;
-        setInstallMessage(prev => prev + decoder.decode(value));
+  const handleModelChange = useCallback(
+    async (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const newModel = e.target.value
+      setModel(newModel)
+      showPopup(`Model changed to ${newModel}`)
+
+      try {
+        // Check if model is installed
+        const checkResponse = await fetch(`/api/check-model?model=${encodeURIComponent(newModel)}`)
+        if (!checkResponse.ok) {
+          console.error(`Failed to check model ${newModel}`)
+          return
+        }
+        const result = await checkResponse.json()
+        // If not installed, install it
+        if (!result.installed) {
+          await installModel(newModel)
+        }
+      } catch (error) {
+        console.error(`Failed to check/install model ${newModel}:`, error)
       }
-    } catch (error) {
-      console.error('Error installing model:', error);
-      showPopup(`Error installing model: ${model}`);
-    } finally {
-      setIsInstalling(false);
-    }
-  }, [showPopup]);
+    },
+    [installModel, showPopup],
+  )
 
-  const handleModelChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newModel = e.target.value;
-    setModel(newModel);
-    showPopup(`Model changed to ${newModel}`);
+  console.log("Render InstallDialog:", isInstalling ? "Yes" : "No")
 
-    try {
-      // Check if model is installed
-      const checkResponse = await fetch(`/api/check-model?model=${encodeURIComponent(newModel)}`);
-      if (!checkResponse.ok) {
-        console.error(`Failed to check model ${newModel}`);
-        return;
+  const renderMessage = (content: string) => {
+    const parts = content.split(/(```[\s\S]*?```)/g)
+    return parts.map((part, index) => {
+      if (part.startsWith("```")) {
+        const codeMatch = part.match(/```(\w+)?\n([\s\S]+)```/)
+        if (codeMatch) {
+          const [, language, code] = codeMatch
+          return <CodeBlock key={index} code={code.trim()} language={language || "javascript"} />
+        }
+      } else {
+        return part.split('**').map((subpart, subIndex) =>
+          subIndex % 2 === 1 ? <strong key={`${index}-${subIndex}`}>{subpart}</strong> : subpart
+        )
       }
-      const result = await checkResponse.json();
-      // If not installed, install it
-      if (!result.installed) {
-        await installModel(newModel);
-      }
-    } catch (error) {
-      console.error(`Failed to check/install model ${newModel}:`, error);
-    }
-  }, [installModel, showPopup]);
-
-  console.log('Render InstallDialog:', isInstalling ? 'Yes' : 'No');
+    })
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-white relative">
@@ -112,25 +137,15 @@ export default function Chat() {
       <main className="flex-1 overflow-auto">
         <div className="container flex-1 w-full max-w-4xl mx-auto px-4">
           <div className="space-y-4 py-4">
-            {messages.map(m => (
-              <div
-                key={m.id}
-                className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
+            {messages.map((m) => (
+              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`
                     rounded-lg px-4 py-2 max-w-[85%] sm:max-w-[75%]
-                    ${m.role === 'user' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-100 text-gray-900'
-                    }
+                    ${m.role === "user" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-900"}
                   `}
                 >
-                  <div className="prose prose-sm dark:prose-invert">
-                    {m.content.split('**').map((part, index) =>
-                      index % 2 === 1 ? <strong key={index}>{part}</strong> : part
-                    )}
-                  </div>
+                  <div className="prose prose-sm dark:prose-invert">{renderMessage(m.content)}</div>
                 </div>
               </div>
             ))}
@@ -158,8 +173,8 @@ export default function Chat() {
               placeholder="Message Ollama..."
               className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
             />
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={isTyping || isInstalling}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:opacity-50 disabled:hover:bg-blue-600"
             >
@@ -169,6 +184,6 @@ export default function Chat() {
         </div>
       </div>
     </div>
-  );
+  )
 }
 
