@@ -127,7 +127,9 @@ export default function Chat() {
                   `}
                 >
                   <div className="prose prose-sm dark:prose-invert">
-                    {m.content}
+                    {m.content.split('**').map((part, index) =>
+                      index % 2 === 1 ? <strong key={index}>{part}</strong> : part
+                    )}
                   </div>
                 </div>
               </div>
