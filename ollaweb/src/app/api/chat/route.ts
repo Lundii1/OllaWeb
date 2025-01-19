@@ -6,6 +6,16 @@ import { promisify } from 'node:util';
 const execAsync = promisify(exec);
 const ollama = createOllama();
 
+let ollamaStarted = false;
+
+async function ensureOllamaRunning() {
+  if (!ollamaStarted) {
+    console.log('Starting Ollama server...');
+    exec('ollama serve');
+    ollamaStarted = true;
+  }
+}
+
 async function checkModelInstalled(modelName: string): Promise<boolean> {
   try {
     console.log(`Checking if model ${modelName} is installed...`);
@@ -58,6 +68,7 @@ async function installModel(model: string, onProgress: (progress: string) => voi
 }
 
 export async function POST(req: Request) {
+  await ensureOllamaRunning();
   try {
     const { messages, model } = await req.json();
     const selectedModel = model || 'llama3.2';
@@ -97,6 +108,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  await ensureOllamaRunning();
   const url = new URL(req.url);
   if (url.pathname === '/api/check-model') {
     const modelParam = url.searchParams.get('model');
