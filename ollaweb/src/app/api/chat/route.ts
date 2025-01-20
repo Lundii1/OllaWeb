@@ -70,8 +70,20 @@ async function installModel(model: string, onProgress: (progress: string) => voi
 export async function POST(req: Request) {
   await ensureOllamaRunning();
   try {
-    const { messages, model } = await req.json();
-    const selectedModel = model || 'llama3.2';
+    let messages, model, image;
+    if (req.headers.get('content-type')?.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      messages = JSON.parse(formData.get('messages') as string);
+      model = formData.get('model') as string || 'llama3.2';
+      image = formData.get('image') as File;
+    } else {
+      const json = await req.json();
+      messages = json.messages;
+      model = json.model || 'llama3.2';
+      image = null;
+    }
+
+    const selectedModel = model;
 
     const isInstalled = await checkModelInstalled(selectedModel);
     if (!isInstalled) {
@@ -89,9 +101,17 @@ export async function POST(req: Request) {
       }
     }
 
+    const imageBase64 = image ? await imageToBase64(image) : null;
+
     const result = streamText({
       model: ollama(selectedModel),
-      messages,
+      messages: messages.map((msg: any) => ({
+        role: msg.role,
+        content: [
+          { type: 'text', text: msg.content },
+          ...(imageBase64 ? [{ type: 'image', image: imageBase64 }] : []),
+        ],
+      })),
     });
 
     return result.toDataStreamResponse();
@@ -105,6 +125,15 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+async function imageToBase64(image: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(image);
+  });
 }
 
 export async function GET(req: Request) {

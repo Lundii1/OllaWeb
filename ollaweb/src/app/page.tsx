@@ -97,6 +97,14 @@ export default function Chat() {
     [installModel, showPopup],
   )
 
+  const handleImageChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      console.log("Selected image file:", file)
+      // Add your image handling logic here
+    }
+  }, [])
+
   console.log("Render InstallDialog:", isInstalling ? "Yes" : "No")
 
   const renderMessage = (content: string) => {
@@ -127,9 +135,11 @@ export default function Chat() {
             onChange={handleModelChange}
             className="px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="llama3.2">Llama 3.2 (2B|2GB)</option>
-            <option value="qwq">QwQ (32B|20GB)</option>
-            <option value="mistral">Mistral (7B|4.1GB)</option>
+             <option value="llama3.2">Llama 3.2 (2B|2GB) 💬</option>
+            <option value="qwq">QwQ (32B|20GB) 💬</option>
+            <option value="mistral">Mistral (7B|4.1GB) 💬</option>
+            <option value="llama3.2-vision">Llama 3.2 Vision (11B|7.9GB) 💬👁️ </option>
+
           </select>
         </div>
       </header>
@@ -167,6 +177,13 @@ export default function Chat() {
       <div className="sticky bottom-0 border-t bg-white">
         <div className="container max-w-4xl mx-auto px-4 py-4">
           <form onSubmit={onSubmit} className="flex space-x-2">
+          <input
+              type="file"
+              accept="image/*"
+              onChange={handleImageChange}
+              disabled={model !== 'llama3.2-vision'}
+              className={`flex-2 px-4 py-2 text-sm text-white rounded-lg ${model === 'llama3.2-vision' ? 'bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-blue-600' : 'bg-gray-300 cursor-not-allowed'}`}
+            />
             <input
               value={input}
               onChange={handleInputChange}
