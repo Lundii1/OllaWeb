@@ -1,206 +1,293 @@
-"use client"
+"use client";
 
-import type React from "react"
-import { useState, useCallback, useEffect } from "react"
-import { useChat } from "ai/react"
-import { InstallDialog } from "./components/install-dialog"
-import { CodeBlock } from "./components/code-block"
+import { useState, useCallback, useRef, useEffect } from "react"; // Added useEffect
+import { useChat } from "ai/react";
+import { InstallDialog } from "./components/install-dialog";
+import { CodeBlock } from "./components/code-block";
+
+type Message = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+};
 
 export default function Chat() {
-  const [model, setModel] = useState("llama3.2")
-  const { messages, input, handleInputChange, handleSubmit } = useChat({
+  // Add a ref for the file input
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [model, setModel] = useState("llama3.2-vision");
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [isInstalling, setIsInstalling] = useState(false);
+  const [installMessage, setInstallMessage] = useState("");
+  const [isResponding, setIsResponding] = useState(false);
+
+  const { 
+    messages, 
+    input, 
+    handleInputChange, 
+    setMessages,
+    setInput,
+    isLoading: isTyping 
+  } = useChat({
     api: "/api/chat",
-    body: { model },
-  })
-  const [isTyping, setIsTyping] = useState(false)
-  const [isInstalling, setIsInstalling] = useState(false)
-  const [installMessage, setInstallMessage] = useState("")
-
-  useEffect(() => {
-    console.log("isInstalling:", isInstalling)
-  }, [isInstalling])
-
-  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    setIsTyping(true)
-    try {
-      await handleSubmit(e)
-    } catch (error) {
-      console.error("Error submitting message:", error)
-    } finally {
-      setIsTyping(false)
-    }
-  }
-
-  const showPopup = useCallback((message: string) => {
-    alert(message)
-  }, [])
-
-  const installModel = useCallback(
-    async (model: string) => {
-      setIsInstalling(true)
-      setInstallMessage(`Installing model ${model}...`)
-      try {
-        const response = await fetch(`/api/chat`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ messages: [], model }),
-        })
-
-        if (!response.body) {
-          setInstallMessage(`No response body received for model ${model}.`)
-          return
-        }
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder("utf-8")
-        let done = false
-
-        while (!done) {
-          const { value, done: readerDone } = await reader.read()
-          done = readerDone
-          setInstallMessage((prev) => prev + decoder.decode(value))
-        }
-      } catch (error) {
-        console.error("Error installing model:", error)
-        showPopup(`Error installing model: ${model}`)
-      } finally {
-        setIsInstalling(false)
-      }
-    },
-    [showPopup],
-  )
-
-  const handleModelChange = useCallback(
-    async (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const newModel = e.target.value
-      setModel(newModel)
-      showPopup(`Model changed to ${newModel}`)
-
-      try {
-        // Check if model is installed
-        const checkResponse = await fetch(`/api/check-model?model=${encodeURIComponent(newModel)}`)
-        if (!checkResponse.ok) {
-          console.error(`Failed to check model ${newModel}`)
-          return
-        }
-        const result = await checkResponse.json()
-        // If not installed, install it
-        if (!result.installed) {
-          await installModel(newModel)
-        }
-      } catch (error) {
-        console.error(`Failed to check/install model ${newModel}:`, error)
-      }
-    },
-    [installModel, showPopup],
-  )
+    body: { model }
+  });
 
   const handleImageChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    const file = e.target.files?.[0];
     if (file) {
-      console.log("Selected image file:", file)
-      // Add your image handling logic here
+      setImageFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    } else {
+      setImageFile(null);
+      setImagePreview(null);
     }
-  }, [])
+  }, []);
 
-  console.log("Render InstallDialog:", isInstalling ? "Yes" : "No")
-
-  const renderMessage = (content: string) => {
-    const parts = content.split(/(```[\s\S]*?```)/g)
-    return parts.map((part, index) => {
-      if (part.startsWith("```")) {
-        const codeMatch = part.match(/```(\w+)?\n([\s\S]+)```/)
-        if (codeMatch) {
-          const [, language, code] = codeMatch
-          return <CodeBlock key={index} code={code.trim()} language={language || "javascript"} />
-        }
-      } else {
-        return part.split('**').map((subpart, subIndex) =>
-          subIndex % 2 === 1 ? <strong key={`${index}-${subIndex}`}>{subpart}</strong> : subpart
-        )
+  const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setIsResponding(true);
+    
+    const formData = new FormData();
+    if (imageFile) formData.append("image", imageFile);
+    
+    // Create a new messages array that includes the pending message
+    const newMessages = [
+      ...messages,
+      { role: 'user', content: input, image: imageFile ? URL.createObjectURL(imageFile) : undefined }
+    ];
+    
+    formData.append("messages", JSON.stringify(newMessages));
+    formData.append("model", model);
+  
+    try {
+      // Clear inputs immediately
+      setInput("");
+      setImageFile(null);
+      setImagePreview(null);
+  
+      // Add user message to history
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'user',
+        content: input,
+        image: imageFile ? URL.createObjectURL(imageFile) : undefined
+      }]);
+  
+      // Generate unique ID for the assistant response
+      const assistantMessageId = Date.now().toString() + '-assistant';
+      
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        body: formData
+      });
+  
+      const reader = response.body?.getReader();
+      if (!reader) return;
+  
+      const decoder = new TextDecoder();
+      let done = false;
+      let responseText = "";
+  
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        responseText += decoder.decode(value || new Uint8Array());
+        
+        // Update or create assistant message
+        setMessages(prev => {
+          const existingMessageIndex = prev.findIndex(msg => msg.id === assistantMessageId);
+          
+          if (existingMessageIndex !== -1) {
+            // Update existing assistant message
+            const updated = [...prev];
+            updated[existingMessageIndex] = {
+              ...updated[existingMessageIndex],
+              content: responseText
+            };
+            return updated;
+          }
+          
+          // Add new assistant message
+          return [...prev, {
+            id: assistantMessageId,
+            role: 'assistant',
+            content: responseText
+          }];
+        });
       }
-    })
-  }
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (error) {
+      console.error("Chat error:", error);
+      // Remove temporary message on error
+      setMessages(prev => prev.filter(msg => !msg.id.endsWith('-assistant')));
+    } finally {
+      setIsResponding(false);
+    }
+  }, [imageFile, messages, input, model, setMessages, setInput]);
+
+  useEffect(() => {
+    const handleModelInstallation = async () => {
+      try {
+        setIsInstalling(true);
+        setInstallMessage(`Checking ${model} installation...`);
+        
+        // Check model installation status
+        const checkResponse = await fetch(`/api/check-model?model=${model}`);
+        if (!checkResponse.ok) throw new Error('Check failed');
+        
+        const { installed } = await checkResponse.json();
+        
+        if (!installed) {
+          setInstallMessage(`Downloading ${model}...`);
+          
+          // Start model installation
+          const installResponse = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, installOnly: true })
+          });
+
+          if (!installResponse.body) return;
+          
+          const reader = installResponse.body.getReader();
+          const decoder = new TextDecoder();
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value);
+            setInstallMessage(prev => `${prev}\n${chunk}`);
+          }
+        }
+      } catch (error) {
+        console.error('Installation error:', error);
+        setInstallMessage(`Installation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      } finally {
+        setIsInstalling(false);
+      }
+    };
+
+    handleModelInstallation();
+  }, [model]); // Trigger when model changes
+
+  const renderMessageContent = (content: string) => {
+    return content.split(/(```[\s\S]*?```)/g).map((part, index) => {
+      if (part.startsWith("```")) {
+        const match = part.match(/```(\w+)?\n([\s\S]+?)```/);
+        return match ? (
+          <CodeBlock 
+            key={index} 
+            code={match[2].trim()} 
+            language={match[1] || 'text'} 
+          />
+        ) : part;
+      }
+      return part.split('**').map((text, i) => 
+        i % 2 ? <strong key={`${index}-${i}`}>{text}</strong> : text
+      );
+    });
+  };
 
   return (
-    <div className="flex flex-col min-h-screen bg-white relative">
+    <div className="flex flex-col min-h-screen bg-white">
       <InstallDialog isOpen={isInstalling} message={installMessage} />
-      <header className="sticky top-0 z-10 border-b bg-white">
-        <div className="container flex items-center justify-between h-14 px-4">
-          <h1 className="text-lg font-semibold">OllaWeb</h1>
+      
+      <header className="sticky top-0 bg-white border-b z-10">
+        <div className="container mx-auto px-4 h-14 flex items-center justify-between">
+          <h1 className="font-semibold">Ollama Web</h1>
           <select
             value={model}
-            onChange={handleModelChange}
-            className="px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            onChange={(e) => setModel(e.target.value)}
+            className="px-3 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-             <option value="llama3.2">Llama 3.2 (2B|2GB) 💬</option>
-            <option value="qwq">QwQ (32B|20GB) 💬</option>
+            <option value="llama3.2">Llama 3.2 (2B|2GB) 💬</option>
             <option value="mistral">Mistral (7B|4.1GB) 💬</option>
+            <option value="qwq">QwQ (32B|20GB) 💬</option>
+            <option value="llava-llama3">Llava-llama3 (8B|5.5GB) 💬👁️ </option>
             <option value="llama3.2-vision">Llama 3.2 Vision (11B|7.9GB) 💬👁️ </option>
-
           </select>
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto">
-        <div className="container flex-1 w-full max-w-4xl mx-auto px-4">
-          <div className="space-y-4 py-4">
-            {messages.map((m) => (
-              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`
-                    rounded-lg px-4 py-2 max-w-[85%] sm:max-w-[75%]
-                    ${m.role === "user" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-900"}
-                  `}
-                >
-                  <div className="prose prose-sm dark:prose-invert">{renderMessage(m.content)}</div>
+      <main className="flex-1 overflow-auto p-4">
+        <div className="max-w-4xl mx-auto space-y-4">
+          {messages.map((message) => (
+            <div 
+              key={message.id}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`p-3 rounded-lg max-w-[85%] ${
+                message.role === 'user' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'bg-gray-100 text-gray-900'
+              }`}>
+                <div className="prose">
+                  {renderMessageContent(message.content)}
                 </div>
               </div>
-            ))}
-            {isTyping && (
-              <div className="flex justify-start">
-                <div className="bg-gray-100 rounded-lg px-4 py-2">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          ))}
+          {isTyping && (
+            <div className="flex items-center justify-center space-x-2">
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100" />
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200" />
+            </div>
+          )}
         </div>
       </main>
 
-      <div className="sticky bottom-0 border-t bg-white">
-        <div className="container max-w-4xl mx-auto px-4 py-4">
-          <form onSubmit={onSubmit} className="flex space-x-2">
-          <input
+      <footer className="sticky bottom-0 bg-white border-t">
+        <div className="max-w-4xl mx-auto p-4">
+          <form onSubmit={handleSubmit} className="flex items-center gap-2">
+            {imagePreview && (
+              <img 
+                src={imagePreview} 
+                alt="Uploaded content" 
+                className="w-20 h-auto rounded"
+              />
+            )}
+            <input
               type="file"
               accept="image/*"
               onChange={handleImageChange}
               disabled={model !== 'llama3.2-vision'}
-              className={`flex-2 px-4 py-2 text-sm text-white rounded-lg ${model === 'llama3.2-vision' ? 'bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-blue-600' : 'bg-gray-300 cursor-not-allowed'}`}
+              ref={fileInputRef}
+              className="hidden"
             />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={model !== 'llama3.2-vision'}
+              className={`px-4 py-2 rounded-lg flex items-center justify-center ${
+                model === 'llama3.2-vision'
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-gray-200 cursor-not-allowed'
+              }`}
+            >
+              📎
+            </button>
             <input
               value={input}
               onChange={handleInputChange}
-              placeholder="Message Ollama..."
-              className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
+              placeholder="Type your message..."
+              className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <button
               type="submit"
-              disabled={isTyping || isInstalling}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:opacity-50 disabled:hover:bg-blue-600"
+              disabled={isTyping || isResponding}
+              className="w-14 h-10 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center"
             >
               Send
             </button>
           </form>
         </div>
-      </div>
+      </footer>
     </div>
-  )
+  );
 }
-
