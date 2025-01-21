@@ -244,28 +244,30 @@ export default function Chat() {
 
       <footer className="sticky bottom-0 bg-white border-t">
         <div className="max-w-4xl mx-auto p-4">
-          <form onSubmit={handleSubmit} className="flex items-center gap-2">
-            {imagePreview && (
+          {imagePreview && (
+            <div className="flex justify-center mb-2">
               <img 
                 src={imagePreview} 
                 alt="Uploaded content" 
                 className="w-20 h-auto rounded"
               />
-            )}
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="flex items-center gap-2">
             <input
               type="file"
               accept="image/*"
               onChange={handleImageChange}
-              disabled={model !== 'llama3.2-vision'}
+              disabled={model !== 'llama3.2-vision' && model !== 'llava-llama3'}
               ref={fileInputRef}
               className="hidden"
             />
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={model !== 'llama3.2-vision'}
+              disabled={model !== 'llama3.2-vision' && model !== 'llava-llama3'}
               className={`px-4 py-2 rounded-lg flex items-center justify-center ${
-                model === 'llama3.2-vision'
+                model === 'llama3.2-vision' || model === 'llava-llama3'
                   ? 'bg-blue-600 text-white hover:bg-blue-700'
                   : 'bg-gray-200 cursor-not-allowed'
               }`}
