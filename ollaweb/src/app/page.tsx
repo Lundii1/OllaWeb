@@ -194,12 +194,12 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-white">
+    <div className="flex flex-col min-h-screen bg-gray-100">
       <InstallDialog isOpen={isInstalling} message={installMessage} />
       
-      <header className="sticky top-0 bg-white border-b z-10">
+      <header className="sticky top-0 bg-white border-b z-10 shadow-sm">
         <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <h1 className="font-semibold">Ollama Web</h1>
+          <h1 className="font-semibold text-xl text-gray-800 custom-header">OllaWeb</h1>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
@@ -224,7 +224,7 @@ export default function Chat() {
               <div className={`p-3 rounded-lg max-w-[85%] ${
                 message.role === 'user' 
                   ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-100 text-gray-900'
+                  : 'bg-white text-gray-900 shadow-sm'
               }`}>
                 <div className="prose">
                   {renderMessageContent(message.content)}
@@ -242,7 +242,7 @@ export default function Chat() {
         </div>
       </main>
 
-      <footer className="sticky bottom-0 bg-white border-t">
+      <footer className="sticky bottom-0 bg-white border-t shadow-sm">
         <div className="max-w-4xl mx-auto p-4">
           {imagePreview && (
             <div className="flex justify-center mb-2">
