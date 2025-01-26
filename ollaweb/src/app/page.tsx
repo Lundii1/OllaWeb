@@ -176,7 +176,7 @@ export default function Chat() {
   }, [model]); // Trigger when model changes
 
   const renderMessageContent = (content: string) => {
-    return content.split(/(```[\s\S]*?```)/g).map((part, index) => {
+    return content.split(/(```[\s\S]*?```|<think>[\s\S]*?<\/think>)/g).map((part, index) => {
       if (part.startsWith("```")) {
         const match = part.match(/```(\w+)?\n([\s\S]+?)```/);
         return match ? (
@@ -186,6 +186,18 @@ export default function Chat() {
             language={match[1] || 'text'} 
           />
         ) : part;
+      }
+      if (part.trim().startsWith("<think>")) {
+        const trimmed = part.trim();
+        const thinkContent = trimmed.slice(7, -8);
+        if(thinkContent.length == 2){
+          return null;
+        }
+        return (
+          <div key={index} className="bg-gray-100 p-2 italic text-gray-600">
+            {"Thinking: " +  thinkContent}
+          </div>
+        );
       }
       return part.split('**').map((text, i) => 
         i % 2 ? <strong key={`${index}-${i}`}>{text}</strong> : text
@@ -208,6 +220,8 @@ export default function Chat() {
             <option value="llama3.2">Llama 3.2 (2B|2GB) 💬</option>
             <option value="mistral">Mistral (7B|4.1GB) 💬</option>
             <option value="qwq">QwQ (32B|20GB) 💬</option>
+            <option value="deepseek-r1:7b">Deepseek-R1 7B (7B|4.7GB) 💬</option>
+            <option value="deepseek-r1:32b">Deepseek-R1 32B (32B|20GB) 💬</option>
             <option value="llava-llama3">Llava-llama3 (8B|5.5GB) 💬👁️ </option>
             <option value="llama3.2-vision">Llama 3.2 Vision (11B|7.9GB) 💬👁️ </option>
           </select>
