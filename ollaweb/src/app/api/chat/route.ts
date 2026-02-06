@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   try {
     const formData = await req.formData();
     const messages = JSON.parse(formData.get('messages') as string);
-    const model = formData.get('model') as string || 'llama3.2-vision';
+    const model = formData.get('model') as string || 'llama3.2';
     const image = formData.get('image') as File;
 
     // Model installation check
@@ -56,13 +56,18 @@ export async function POST(req: Request) {
 
     // Detect optional web search command on the latest user message
     const last = messages[messages.length - 1];
+    console.log('[DEBUG] Last message:', JSON.stringify(last));
+    console.log('[DEBUG] Content type:', typeof last?.content);
     let webContextSystemMessage: any | null = null;
     if (last?.role === 'user' && typeof last.content === 'string') {
       const match = last.content.trim().match(/^web:\s*(.+)$/i);
+      console.log('[DEBUG] Web prefix match:', match ? 'YES' : 'NO', 'Content:', last.content.substring(0, 80));
       if (match && match[1]) {
         const searchQuery = match[1].trim();
+        console.log('[DEBUG] Running web search for:', searchQuery);
         try {
           const search = await runWebSearch(searchQuery);
+          console.log('[DEBUG] Search result:', search.answer ? 'Got answer' : 'No answer', 'Results:', search.results?.length);
           const lines: string[] = [];
           if (search.answer) {
             lines.push(`Answer: ${search.answer}`);
@@ -78,9 +83,7 @@ export async function POST(req: Request) {
           }
           webContextSystemMessage = {
             role: 'system',
-            content: [
-              { type: 'text', text: `Web search results for: ${searchQuery}\n\n${lines.join('\n')}` }
-            ]
+            content: `Web search results for: ${searchQuery}\n\n${lines.join('\n')}`,
           };
           // Replace user content to remove the web: prefix for cleaner prompts
           last.content = last.content.replace(/^web:\s*/i, '');
@@ -89,9 +92,7 @@ export async function POST(req: Request) {
           const msg = err instanceof Error ? err.message : 'Unknown error';
           webContextSystemMessage = {
             role: 'system',
-            content: [
-              { type: 'text', text: `Web search failed (${msg}). Proceed without external data.` }
-            ]
+            content: `Web search failed (${msg}). Proceed without external data.`,
           };
         }
       }
@@ -100,23 +101,27 @@ export async function POST(req: Request) {
     // Prepare messages with image only on the latest user message
     const processedMessages = messages.map((msg: any, index: number) => {
       const isLatestUserMessage = index === messages.length - 1 && msg.role === 'user';
+      // Normalize content: ensure it's always a string before wrapping
+      const textContent = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.map((part: any) => typeof part === 'string' ? part : part.text || '').join('')
+          : String(msg.content || '');
 
       return {
         role: msg.role,
         content: [
-          { type: 'text', text: msg.content },
+          { type: 'text', text: textContent },
           ...(isLatestUserMessage && imageContent ? [{ type: 'image', image: imageContent }] : [])
         ]
       };
     });
 
-    // Prepend web context if available
-    const finalMessages = webContextSystemMessage ? [webContextSystemMessage, ...processedMessages] : processedMessages;
-
     // Generate response
     const result = await streamText({
       model: ollama(model),
-      messages: finalMessages
+      messages: processedMessages,
+      ...(webContextSystemMessage ? { system: webContextSystemMessage.content } : {}),
     });
 
     return result.toTextStreamResponse();

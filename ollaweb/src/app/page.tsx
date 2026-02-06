@@ -6,32 +6,39 @@ import { InstallDialog } from "./components/install-dialog";
 import { CodeBlock } from "./components/code-block";
 import { CouncilSelector } from "./components/council-selector";
 import { CouncilResponse } from "./components/council-response";
-import type { ChatMode, CouncilState, CouncilEvent, IndividualResponse } from "../lib/types";
-
-type Message = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  councilData?: IndividualResponse[];
-};
+import { AVAILABLE_MODELS } from "../lib/types";
+import type { ChatMode, CouncilState, CouncilEvent, IndividualResponse, Message, Conversation, ConfidenceLevel } from "../lib/types";
+import { ChatHistory } from "./components/chat-history";
+import { listConversations, getConversation, saveConversation, deleteConversation as deleteConvo, generateTitle, getSavedCouncilConfig, setSavedCouncilConfig } from "../lib/conversation-storage";
 
 export default function Chat() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const [model, setModel] = useState("llama3.2-vision");
+  const [model, setModel] = useState("llama3.2");
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [isInstalling, setIsInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState("");
   const [isResponding, setIsResponding] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [debateEnabled, setDebateEnabled] = useState(false);
 
-  // Council state
+  // Chat history state
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [savedConversations, setSavedConversations] = useState<Conversation[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Council state — initialize directly from localStorage to avoid race conditions
   const [chatMode, setChatMode] = useState<ChatMode>('single');
-  const [councilModels, setCouncilModels] = useState<[string, string, string]>([
-    'llama3.2', 'mistral', 'deepseek-r1:7b'
-  ]);
-  const [moderatorIndex, setModeratorIndex] = useState(0);
+  const [councilModels, setCouncilModels] = useState<[string, string, string]>(() => {
+    const saved = typeof window !== 'undefined' ? getSavedCouncilConfig() : null;
+    return saved?.models ? [...saved.models] : ['llama3.2', 'mistral', 'deepseek-r1:7b'];
+  });
+  const [moderatorIndex, setModeratorIndex] = useState(() => {
+    const saved = typeof window !== 'undefined' ? getSavedCouncilConfig() : null;
+    return saved?.moderatorIndex ?? 0;
+  });
   const [councilState, setCouncilState] = useState<CouncilState>({
     phase: 'idle',
     individualResponses: [],
@@ -51,6 +58,69 @@ export default function Chat() {
     body: { model }
   });
 
+  // Load saved conversations on mount
+  useEffect(() => {
+    setSavedConversations(listConversations());
+  }, []);
+
+  // Auto-save council config whenever models or moderator change
+  useEffect(() => {
+    setSavedCouncilConfig({ models: councilModels, moderatorIndex });
+  }, [councilModels, moderatorIndex]);
+
+  // Auto-save conversation when response finishes
+  const currentConversationIdRef = useRef(currentConversationId);
+  currentConversationIdRef.current = currentConversationId;
+
+  useEffect(() => {
+    if (isResponding || messages.length === 0) return;
+    const id = currentConversationIdRef.current;
+    if (!id) return;
+
+    const existing = getConversation(id);
+    const convo: Conversation = {
+      id,
+      title: generateTitle(messages as Message[]),
+      messages: (messages as Message[]).map(m => ({ ...m, image: undefined })),
+      chatMode,
+      model,
+      councilModels: chatMode === 'council' ? councilModels : undefined,
+      moderatorIndex: chatMode === 'council' ? moderatorIndex : undefined,
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    };
+    saveConversation(convo);
+    setSavedConversations(listConversations());
+  }, [isResponding, messages, chatMode, model, councilModels, moderatorIndex]);
+
+  const handleNewChat = useCallback(() => {
+    setMessages([]);
+    setCurrentConversationId(null);
+    setInput("");
+    setCouncilState({ phase: 'idle', individualResponses: [], consensusText: '', moderatorModel: '' });
+    setHistoryOpen(false);
+  }, [setMessages, setInput]);
+
+  const handleSelectConversation = useCallback((id: string) => {
+    const convo = getConversation(id);
+    if (!convo) return;
+    setMessages(convo.messages as any);
+    setCurrentConversationId(id);
+    setChatMode(convo.chatMode);
+    setModel(convo.model);
+    // Council config is universal — don't override from per-conversation data
+    setCouncilState({ phase: 'idle', individualResponses: [], consensusText: '', moderatorModel: '' });
+    setHistoryOpen(false);
+  }, [setMessages]);
+
+  const handleDeleteConversation = useCallback((id: string) => {
+    deleteConvo(id);
+    setSavedConversations(listConversations());
+    if (id === currentConversationId) {
+      handleNewChat();
+    }
+  }, [currentConversationId, handleNewChat]);
+
   const handleImageChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -63,20 +133,26 @@ export default function Chat() {
   }, []);
 
   // Check if any selected model supports vision (for image upload button)
+  const visionModelValues: string[] = AVAILABLE_MODELS.filter(m => m.vision).map(m => m.value);
   const hasVisionModel = chatMode === 'single'
-    ? (model === 'llama3.2-vision' || model === 'llava-llama3')
-    : councilModels.some(m => m === 'llama3.2-vision' || m === 'llava-llama3');
+    ? visionModelValues.includes(model)
+    : councilModels.some(m => visionModelValues.includes(m));
 
   // Single AI submit handler (existing logic)
   const handleSingleSubmit = useCallback(async () => {
     setIsResponding(true);
+
+    // Auto-prefix with web: when search toggle is enabled
+    const effectiveInput = (webSearchEnabled && !input.trim().match(/^web:\s/i))
+      ? `web: ${input}`
+      : input;
 
     const formData = new FormData();
     if (imageFile) formData.append("image", imageFile);
 
     const newMessages = [
       ...messages,
-      { role: 'user', content: input, image: imageFile ? URL.createObjectURL(imageFile) : undefined }
+      { role: 'user', content: effectiveInput, image: imageFile ? URL.createObjectURL(imageFile) : undefined }
     ];
 
     formData.append("messages", JSON.stringify(newMessages));
@@ -142,19 +218,21 @@ export default function Chat() {
     } finally {
       setIsResponding(false);
     }
-  }, [imageFile, messages, input, model, setMessages, setInput]);
+  }, [imageFile, messages, input, model, setMessages, setInput, webSearchEnabled]);
 
   // Council event dispatcher
   const dispatchCouncilEvent = useCallback((event: CouncilEvent) => {
     setCouncilState(prev => {
       switch (event.event) {
+        case 'health_check':
+          return { ...prev, phase: 'health_check' };
         case 'individual_start': {
           const updated = [...prev.individualResponses];
           updated[event.payload.index] = {
             ...updated[event.payload.index],
             status: 'streaming',
           };
-          return { ...prev, individualResponses: updated };
+          return { ...prev, phase: 'individual', individualResponses: updated };
         }
         case 'individual_chunk': {
           const updated = [...prev.individualResponses];
@@ -179,15 +257,22 @@ export default function Chat() {
             ...updated[event.payload.index],
             status: 'error',
             error: event.payload.error,
+            errorAction: event.payload.action,
           };
           return { ...prev, individualResponses: updated };
         }
+        case 'debate_start':
+          return { ...prev, phase: 'debating' };
+        case 'debate_chunk':
+          return prev; // debate details are internal
+        case 'debate_complete':
+          return prev; // synthesis_start will follow
         case 'synthesis_start':
           return { ...prev, phase: 'synthesizing', moderatorModel: event.payload.moderator };
         case 'synthesis_chunk':
           return { ...prev, consensusText: prev.consensusText + event.payload.text };
         case 'synthesis_complete':
-          return { ...prev, phase: 'complete', consensusText: event.payload.fullText };
+          return { ...prev, phase: 'complete', consensusText: event.payload.fullText, confidence: event.payload.confidence };
         case 'error':
           return { ...prev, phase: 'error' };
         default:
@@ -214,18 +299,21 @@ export default function Chat() {
       moderatorModel: councilModels[moderatorIndex],
     });
 
-    const currentInput = input;
+    // Auto-prefix with web: when search toggle is enabled
+    const currentInput = (webSearchEnabled && !input.trim().match(/^web:\s/i))
+      ? `web: ${input}`
+      : input;
     const currentImageFile = imageFile;
 
     setInput("");
     setImageFile(null);
     setImagePreview(null);
 
-    // Add user message to history
+    // Add user message to history (show clean input without web: prefix)
     setMessages(prev => [...prev, {
       id: Date.now().toString(),
       role: 'user',
-      content: currentInput,
+      content: input,
     }]);
 
     const formData = new FormData();
@@ -236,6 +324,7 @@ export default function Chat() {
     formData.append('messages', JSON.stringify(newMessages));
     formData.append('models', JSON.stringify(councilModels));
     formData.append('moderatorIndex', moderatorIndex.toString());
+    if (debateEnabled) formData.append('enableDebate', 'true');
     if (currentImageFile) formData.append('image', currentImageFile);
 
     try {
@@ -289,6 +378,7 @@ export default function Chat() {
             role: 'assistant',
             content: prev.consensusText,
             councilData: prev.individualResponses,
+            councilConfidence: prev.confidence,
           }]);
         }
         return { ...prev, phase: 'idle' };
@@ -319,19 +409,26 @@ export default function Chat() {
       setIsResponding(false);
       abortControllerRef.current = null;
     }
-  }, [councilModels, moderatorIndex, messages, input, imageFile, setMessages, setInput, dispatchCouncilEvent]);
+  }, [councilModels, moderatorIndex, messages, input, imageFile, setMessages, setInput, dispatchCouncilEvent, webSearchEnabled, debateEnabled]);
 
   // Unified submit handler
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!input.trim()) return;
 
+    // Create a new conversation ID if this is the first message
+    if (!currentConversationId) {
+      const newId = Date.now().toString();
+      setCurrentConversationId(newId);
+      currentConversationIdRef.current = newId;
+    }
+
     if (chatMode === 'council') {
       await handleCouncilSubmit();
     } else {
       await handleSingleSubmit();
     }
-  }, [chatMode, handleCouncilSubmit, handleSingleSubmit, input]);
+  }, [chatMode, handleCouncilSubmit, handleSingleSubmit, input, currentConversationId]);
 
   // Model installation check
   const checkAndInstallModel = useCallback(async (modelName: string) => {
@@ -417,6 +514,8 @@ export default function Chat() {
   };
 
   // Council progress indicator
+  const completedCount = councilState.individualResponses.filter(r => r.status === 'complete').length;
+
   const renderCouncilProgress = () => {
     if (councilState.phase === 'idle' || councilState.phase === 'complete') return null;
 
@@ -424,11 +523,15 @@ export default function Chat() {
       <div className="flex justify-start">
         <div className="bg-retro-surface retro-raised p-4 max-w-[85%] border-l-4 border-retro-green">
           <p className="text-retro-green mb-3">
-            {councilState.phase === 'individual'
-              ? '> Council is deliberating...'
-              : councilState.phase === 'synthesizing'
-                ? '> Synthesizing consensus...'
-                : '> ERROR: Council encountered an error'}
+            {councilState.phase === 'health_check'
+              ? '> Warming up models...'
+              : councilState.phase === 'individual'
+                ? '> Council is deliberating...'
+                : councilState.phase === 'debating'
+                  ? '> Council is debating disagreements...'
+                  : councilState.phase === 'synthesizing'
+                    ? '> Synthesizing consensus...'
+                    : '> ERROR: Council encountered an error'}
           </p>
 
           {/* Per-model status */}
@@ -460,6 +563,12 @@ export default function Chat() {
                       : resp.status === 'error' ? 'FAIL'
                         : 'WAIT'}]
                 </span>
+                {resp.status === 'error' && resp.error && (
+                  <span className="text-retro-red text-sm">— {resp.error}</span>
+                )}
+                {resp.status === 'error' && resp.errorAction && (
+                  <span className="text-retro-amber text-sm">→ {resp.errorAction}</span>
+                )}
               </div>
             ))}
           </div>
@@ -496,7 +605,16 @@ export default function Chat() {
       <header className="sticky top-0 bg-retro-surface retro-raised z-10">
         <div className="retro-titlebar flex items-center justify-between">
           <h1 className="text-retro-green text-lg tracking-wider">[OllaWeb v2.0]</h1>
-          <div className="flex gap-2 text-retro-text text-sm">
+          <div className="flex gap-2 text-retro-text text-sm items-center">
+            <ChatHistory
+              conversations={savedConversations}
+              currentConversationId={currentConversationId}
+              isOpen={historyOpen}
+              onToggle={() => setHistoryOpen(o => !o)}
+              onSelect={handleSelectConversation}
+              onDelete={handleDeleteConversation}
+              onNewChat={handleNewChat}
+            />
             <span className="retro-raised bg-retro-surface px-1 cursor-default">_</span>
             <span className="retro-raised bg-retro-surface px-1 cursor-default">[]</span>
             <span className="retro-raised bg-retro-surface px-1 cursor-default">X</span>
@@ -512,6 +630,8 @@ export default function Chat() {
             onCouncilModelsChange={setCouncilModels}
             moderatorIndex={moderatorIndex}
             onModeratorIndexChange={setModeratorIndex}
+            debateEnabled={debateEnabled}
+            onDebateEnabledChange={setDebateEnabled}
           />
         </div>
       </header>
@@ -527,6 +647,7 @@ export default function Chat() {
                 <CouncilResponse
                   consensusText={message.content}
                   individualResponses={(message as any).councilData}
+                  confidence={(message as any).councilConfidence}
                   renderMessageContent={renderMessageContent}
                 />
               ) : (
@@ -589,6 +710,18 @@ export default function Chat() {
             >
               [IMG]
             </button>
+            <button
+              type="button"
+              onClick={() => setWebSearchEnabled(prev => !prev)}
+              title={webSearchEnabled ? "Web search enabled — click to disable" : "Enable web search"}
+              className={`px-3 py-1 retro-raised flex items-center justify-center ${
+                webSearchEnabled
+                  ? 'bg-retro-blue text-retro-text-bright'
+                  : 'bg-retro-panel text-retro-text-bright hover:bg-retro-blue active:retro-sunken'
+              }`}
+            >
+              [WEB]
+            </button>
             <input
               value={input}
               onChange={handleInputChange}
@@ -599,9 +732,13 @@ export default function Chat() {
               <button
                 type="button"
                 onClick={() => abortControllerRef.current?.abort()}
-                className="px-3 py-1 retro-raised bg-retro-surface text-retro-red hover:bg-retro-red hover:text-retro-text-bright flex items-center justify-center"
+                className={`px-3 py-1 retro-raised flex items-center justify-center ${
+                  completedCount >= 2
+                    ? 'bg-retro-surface text-retro-amber hover:bg-retro-amber hover:text-retro-text-bright'
+                    : 'bg-retro-surface text-retro-red hover:bg-retro-red hover:text-retro-text-bright'
+                }`}
               >
-                [ABORT]
+                {completedCount >= 2 ? '[SKIP REMAINING]' : '[ABORT]'}
               </button>
             ) : (
               <button

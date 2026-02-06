@@ -12,6 +12,8 @@ interface CouncilSelectorProps {
   onCouncilModelsChange: (models: [string, string, string]) => void;
   moderatorIndex: number;
   onModeratorIndexChange: (index: number) => void;
+  debateEnabled: boolean;
+  onDebateEnabledChange: (enabled: boolean) => void;
 }
 
 export function CouncilSelector({
@@ -23,26 +25,26 @@ export function CouncilSelector({
   onCouncilModelsChange,
   moderatorIndex,
   onModeratorIndexChange,
+  debateEnabled,
+  onDebateEnabledChange,
 }: CouncilSelectorProps) {
-  const isPreset =
+  const hasDuplicates = new Set(councilModels).size !== councilModels.length;
+
+  const isDefault =
     councilModels[0] === DEFAULT_COUNCIL_MODELS[0] &&
     councilModels[1] === DEFAULT_COUNCIL_MODELS[1] &&
-    councilModels[2] === DEFAULT_COUNCIL_MODELS[2];
-
-  const hasDuplicates =
-    new Set(councilModels).size !== councilModels.length;
-
-  const handlePresetChange = (value: string) => {
-    if (value === 'default') {
-      onCouncilModelsChange([...DEFAULT_COUNCIL_MODELS]);
-      onModeratorIndexChange(0);
-    }
-  };
+    councilModels[2] === DEFAULT_COUNCIL_MODELS[2] &&
+    moderatorIndex === 0;
 
   const handleModelChange = (index: number, value: string) => {
     const updated: [string, string, string] = [...councilModels];
     updated[index] = value;
     onCouncilModelsChange(updated);
+  };
+
+  const handleReset = () => {
+    onCouncilModelsChange([...DEFAULT_COUNCIL_MODELS]);
+    onModeratorIndexChange(0);
   };
 
   return (
@@ -87,16 +89,32 @@ export function CouncilSelector({
           </select>
         )}
 
-        {/* Council preset selector */}
+        {/* Council controls */}
         {chatMode === 'council' && (
-          <select
-            value={isPreset ? 'default' : 'custom'}
-            onChange={(e) => handlePresetChange(e.target.value)}
-            className="px-2 py-1"
-          >
-            <option value="default">Default Preset</option>
-            <option value="custom">Custom</option>
-          </select>
+          <>
+            {!isDefault && (
+              <button
+                type="button"
+                onClick={handleReset}
+                title="Reset to default models"
+                className="px-2 py-1 retro-raised bg-retro-panel text-retro-amber hover:bg-retro-blue hover:text-retro-text-bright text-xs"
+              >
+                [RESET]
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onDebateEnabledChange(!debateEnabled)}
+              title={debateEnabled ? "Debate round enabled — models will challenge each other before synthesis" : "Enable debate round"}
+              className={`px-2 py-1 retro-raised text-xs ${
+                debateEnabled
+                  ? 'bg-retro-blue text-retro-text-bright'
+                  : 'bg-retro-panel text-retro-text hover:bg-retro-blue hover:text-retro-text-bright'
+              }`}
+            >
+              [DEBATE]
+            </button>
+          </>
         )}
       </div>
 

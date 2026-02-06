@@ -6,26 +6,53 @@ import {
   installModel,
   imageToBase64,
   runWebSearch,
+  pingModel,
+  withRetry,
+  classifyError,
 } from '../../../lib/ollama-utils';
-import type { CouncilEvent } from '../../../lib/types';
+import type { CouncilEvent, ConfidenceLevel } from '../../../lib/types';
 
-const SYNTHESIS_SYSTEM_PROMPT =
-  `You are a council moderator. You have been presented with responses from multiple AI advisors to the same question. Your task is to:
+// ── Constants ──────────────────────────────────────────────────────
 
-1. Identify the key points and insights from each response.
-2. Note where the advisors agree and where they differ.
-3. Synthesize a single, unified answer that represents the best consensus view.
-4. If there are genuine disagreements, acknowledge them and explain the different perspectives.
-5. Do not attribute responses to specific model names — refer to them as "Advisor 1", "Advisor 2", etc.
-6. Your final answer should be comprehensive, balanced, and more useful than any single response alone.
-7. Format your response clearly. Start directly with the consensus answer — do not begin with preamble about being a moderator.`;
-
+const MODEL_TIMEOUT_MS = 120_000;   // 2 min per model
+const SYNTHESIS_TIMEOUT_MS = 90_000; // 1.5 min for synthesis
 const MAX_INDIVIDUAL_CHARS = 8000;
+
+const SYNTHESIS_SYSTEM_PROMPT = `You are synthesizing responses from multiple AI advisors into a single authoritative answer. Produce your response with these sections:
+
+## Consensus
+Where all advisors substantially agree, write the unified answer here. This is the main body and should read as a standalone, authoritative answer to the user's question.
+
+## Points of Divergence
+If advisors disagree on any points, describe each perspective fairly using phrases like "one perspective suggests..." or "another view holds...". If there are no meaningful disagreements, write "The advisors were in broad agreement."
+
+## Confidence Assessment
+Rate the overall agreement as exactly one of: STRONG CONSENSUS | MODERATE CONSENSUS | MIXED VIEWS | SIGNIFICANT DISAGREEMENT
+Then add one sentence explaining why.
+
+Rules:
+- Start directly with the Consensus section. No preamble about being a moderator.
+- Do NOT mention advisor names, model names, or "Advisor 1/2/3". Use generic phrasing only in the divergence section.
+- The Consensus section should be comprehensive and more useful than any single response.
+- Be concise. Do not repeat the same point from multiple angles.`;
+
+// ── Helpers ────────────────────────────────────────────────────────
 
 function truncateResponse(text: string): string {
   if (text.length <= MAX_INDIVIDUAL_CHARS) return text;
   return text.slice(0, MAX_INDIVIDUAL_CHARS) + '\n\n[Response truncated for synthesis]';
 }
+
+function extractConfidence(text: string): ConfidenceLevel {
+  const lower = text.toLowerCase();
+  if (lower.includes('strong consensus')) return 'strong';
+  if (lower.includes('moderate consensus')) return 'moderate';
+  if (lower.includes('mixed views')) return 'mixed';
+  if (lower.includes('significant disagreement')) return 'disagreement';
+  return 'unknown';
+}
+
+// ── Route Handler ──────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   await ensureOllamaRunning();
@@ -36,6 +63,7 @@ export async function POST(req: Request) {
     const models: string[] = JSON.parse(formData.get('models') as string);
     const moderatorIndex = parseInt(formData.get('moderatorIndex') as string) || 0;
     const image = formData.get('image') as File | null;
+    const enableDebate = formData.get('enableDebate') === 'true';
 
     if (!models || models.length !== 3) {
       return new Response(JSON.stringify({ error: 'Exactly 3 models required' }), { status: 400 });
@@ -80,18 +108,14 @@ export async function POST(req: Request) {
           }
           webContextSystemMessage = {
             role: 'system',
-            content: [
-              { type: 'text', text: `Web search results for: ${searchQuery}\n\n${lines.join('\n')}` }
-            ]
+            content: `Web search results for: ${searchQuery}\n\n${lines.join('\n')}`,
           };
           last.content = last.content.replace(/^web:\s*/i, '');
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error';
           webContextSystemMessage = {
             role: 'system',
-            content: [
-              { type: 'text', text: `Web search failed (${msg}). Proceed without external data.` }
-            ]
+            content: `Web search failed (${msg}). Proceed without external data.`,
           };
         }
       }
@@ -100,18 +124,21 @@ export async function POST(req: Request) {
     // Build processed messages
     const processedMessages = messages.map((msg: any, index: number) => {
       const isLatestUserMessage = index === messages.length - 1 && msg.role === 'user';
+      const textContent = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.map((part: any) => typeof part === 'string' ? part : part.text || '').join('')
+          : String(msg.content || '');
       return {
         role: msg.role,
         content: [
-          { type: 'text', text: msg.content },
+          { type: 'text', text: textContent },
           ...(isLatestUserMessage && imageContent ? [{ type: 'image', image: imageContent }] : [])
         ]
       };
     });
 
-    const finalMessages = webContextSystemMessage
-      ? [webContextSystemMessage, ...processedMessages]
-      : processedMessages;
+    const webSystemPrompt = webContextSystemMessage ? webContextSystemMessage.content : undefined;
 
     // Create the SSE stream
     const stream = new ReadableStream({
@@ -119,39 +146,66 @@ export async function POST(req: Request) {
         const encoder = new TextEncoder();
 
         const emit = (event: CouncilEvent) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          } catch {
+            // Controller already closed
+          }
         };
 
         try {
+          // === Phase 0: Health Check / Warm-up ===
+          for (const model of models) {
+            const ready = await pingModel(model);
+            emit({
+              event: 'health_check',
+              payload: { model, status: ready ? 'ready' : 'failed' },
+            });
+          }
+
           // === Phase 1: Individual responses ===
           const individualResults: string[] = ['', '', ''];
+          const modelAbortControllers = models.map(() => new AbortController());
 
           const promises = models.map(async (model, index) => {
             emit({ event: 'individual_start', payload: { model, index } });
 
+            const timeoutId = setTimeout(() => {
+              modelAbortControllers[index].abort();
+            }, MODEL_TIMEOUT_MS);
+
             try {
-              const result = await streamText({
-                model: ollama(model),
-                messages: finalMessages,
-              });
+              await withRetry(
+                async () => {
+                  const result = await streamText({
+                    model: ollama(model),
+                    messages: processedMessages,
+                    abortSignal: modelAbortControllers[index].signal,
+                    ...(webSystemPrompt ? { system: webSystemPrompt } : {}),
+                  });
 
-              for await (const chunk of result.textStream) {
-                individualResults[index] += chunk;
-                emit({
-                  event: 'individual_chunk',
-                  payload: { index, text: chunk },
-                });
-              }
+                  for await (const chunk of result.textStream) {
+                    individualResults[index] += chunk;
+                    emit({
+                      event: 'individual_chunk',
+                      payload: { index, text: chunk },
+                    });
+                  }
+                },
+                { maxRetries: 1, delayMs: 3000, label: model }
+              );
 
+              clearTimeout(timeoutId);
               emit({
                 event: 'individual_complete',
                 payload: { index, model, fullText: individualResults[index] },
               });
             } catch (error) {
-              const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+              clearTimeout(timeoutId);
+              const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
               emit({
                 event: 'individual_error',
-                payload: { index, model, error: errorMsg },
+                payload: { index, model, error: classified.message, action: classified.action },
               });
             }
           });
@@ -164,9 +218,77 @@ export async function POST(req: Request) {
             .filter(r => r.text.length > 0);
 
           if (successfulResponses.length === 0) {
-            emit({ event: 'error', payload: { message: 'All models failed to respond' } });
-            controller.close();
+            emit({ event: 'error', payload: { message: 'All models failed to respond', action: 'Check that Ollama is running and models are installed' } });
             return;
+          }
+
+          // === Phase 1.5: Optional Debate Round ===
+          let debateClarifications = '';
+          if (enableDebate && successfulResponses.length >= 2) {
+            emit({ event: 'debate_start', payload: {} });
+
+            const moderatorModel = models[moderatorIndex] || models[0];
+
+            // Ask moderator to identify the biggest disagreement
+            try {
+              const disagreementCheck = await streamText({
+                model: ollama(moderatorModel),
+                messages: [
+                  {
+                    role: 'user' as const,
+                    content: `Here are responses from multiple AI advisors to the same question:\n\n${
+                      successfulResponses.map((r, i) => `--- Advisor ${i + 1} ---\n${truncateResponse(r.text)}`).join('\n\n')
+                    }\n\nIdentify the single biggest point of disagreement between these advisors in 1-2 sentences. If they all substantially agree, reply with exactly: NONE`,
+                  },
+                ],
+                abortSignal: AbortSignal.timeout(30_000),
+              });
+
+              let disagreementText = '';
+              for await (const chunk of disagreementCheck.textStream) {
+                disagreementText += chunk;
+                emit({ event: 'debate_chunk', payload: { text: chunk } });
+              }
+
+              // If there's a genuine disagreement, ask each model to clarify
+              if (!disagreementText.trim().toUpperCase().includes('NONE') && disagreementText.trim().length > 10) {
+                const clarifications: string[] = [];
+
+                for (const resp of successfulResponses) {
+                  try {
+                    const clarification = await streamText({
+                      model: ollama(resp.model),
+                      messages: [
+                        ...processedMessages,
+                        { role: 'assistant' as const, content: resp.text },
+                        {
+                          role: 'user' as const,
+                          content: `Another advisor disagrees with you on this point: "${disagreementText.trim()}"\n\nIn 2-3 sentences, clarify or defend your position on this specific point.`,
+                        },
+                      ],
+                      maxTokens: 200,
+                      abortSignal: AbortSignal.timeout(30_000),
+                    });
+
+                    let clarText = '';
+                    for await (const chunk of clarification.textStream) {
+                      clarText += chunk;
+                    }
+                    clarifications.push(`--- Advisor ${resp.index + 1} clarification ---\n${clarText}`);
+                  } catch {
+                    // Skip failed clarifications
+                  }
+                }
+
+                if (clarifications.length > 0) {
+                  debateClarifications = `\n\nAfter debate, advisors provided these clarifications:\n\n${clarifications.join('\n\n')}`;
+                }
+              }
+            } catch {
+              // Debate failed, continue without it
+            }
+
+            emit({ event: 'debate_complete', payload: {} });
           }
 
           // === Phase 2: Synthesis ===
@@ -179,7 +301,10 @@ export async function POST(req: Request) {
             .join('\n\n');
 
           const synthesisUserPrompt =
-            `The user asked: "${userQuestion}"\n\n${advisorBlocks}\n\nPlease synthesize these into a single consensus answer.`;
+            `Original question: "${userQuestion}"\n\nThe following advisors have responded independently:\n\n${advisorBlocks}${debateClarifications}\n\nSynthesize these into a single answer. Focus on answering the original question, not on describing what each advisor said.`;
+
+          const synthesisAbort = new AbortController();
+          const synthesisTimeout = setTimeout(() => synthesisAbort.abort(), SYNTHESIS_TIMEOUT_MS);
 
           try {
             const synthesisResult = await streamText({
@@ -194,6 +319,7 @@ export async function POST(req: Request) {
                   content: synthesisUserPrompt,
                 },
               ],
+              abortSignal: synthesisAbort.signal,
             });
 
             let consensusText = '';
@@ -202,17 +328,21 @@ export async function POST(req: Request) {
               emit({ event: 'synthesis_chunk', payload: { text: chunk } });
             }
 
-            emit({ event: 'synthesis_complete', payload: { fullText: consensusText } });
+            clearTimeout(synthesisTimeout);
+
+            const confidence = extractConfidence(consensusText);
+            emit({ event: 'synthesis_complete', payload: { fullText: consensusText, confidence } });
           } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            clearTimeout(synthesisTimeout);
+            const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
             emit({
               event: 'error',
-              payload: { message: `Synthesis failed: ${errorMsg}` },
+              payload: { message: `Synthesis failed: ${classified.message}`, action: classified.action },
             });
           }
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-          emit({ event: 'error', payload: { message: errorMsg } });
+          const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
+          emit({ event: 'error', payload: { message: classified.message, action: classified.action } });
         } finally {
           controller.close();
         }
@@ -228,10 +358,12 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error('Council API Error:', error);
+    const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
     return new Response(
       JSON.stringify({
         error: 'Internal Server Error',
-        message: error instanceof Error ? error.message : 'Unknown error',
+        message: classified.message,
+        action: classified.action,
       }),
       { status: 500 }
     );
