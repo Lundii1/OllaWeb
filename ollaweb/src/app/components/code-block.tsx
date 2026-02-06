@@ -23,11 +23,10 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   }, [code, language])
 
   return (
-    <pre className="rounded-md bg-[#1e1e1e] p-4 overflow-x-auto">
+    <pre className="retro-sunken bg-[#0a0a1a] p-4 overflow-x-auto text-retro-green">
       <code ref={codeRef} className={`language-${language}`}>
         {code}
       </code>
     </pre>
   )
 }
-

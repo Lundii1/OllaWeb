@@ -16,11 +16,16 @@ export function Dialog({ isOpen, children }: DialogProps) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full">
-        {children}
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+      <div className="bg-retro-surface retro-raised max-w-md w-full">
+        <div className="retro-titlebar flex items-center justify-between">
+          <span>System Message</span>
+          <span className="retro-raised bg-retro-surface px-1 cursor-default text-sm">X</span>
+        </div>
+        <div className="p-4">
+          {children}
+        </div>
       </div>
     </div>
   );
 }
-

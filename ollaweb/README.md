@@ -34,3 +34,20 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Web Search
+
+This app supports web search via Tavily.
+
+1. Set your API key in an environment variable before running the dev server:
+
+```bash
+set TAVILY_API_KEY=your_key_here
+# PowerShell: $env:TAVILY_API_KEY = "your_key_here"
+```
+
+2. In chat, prefix your message with `web:` to run a live search and include results in the answer.
+
+Example: `web: latest Node.js LTS version and release date`
+
+You can also call the API directly: `GET /api/search?q=your%20query`.

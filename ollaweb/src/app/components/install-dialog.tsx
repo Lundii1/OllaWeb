@@ -13,14 +13,13 @@ export function InstallDialog({ isOpen, message }: InstallDialogProps) {
 
   return (
     <Dialog isOpen={isOpen}>
-      <h2 className="text-xl font-semibold mb-4">Model Status</h2>
-      <div className="mb-4">
-        <p className="text-sm text-gray-500">{message}</p>
+      <h2 className="text-retro-amber text-lg mb-3">Model Status</h2>
+      <div className="mb-3">
+        <p className="text-retro-text text-sm">{message}</p>
       </div>
-      <div className="h-2 bg-blue-200 rounded-full">
-        <div className="h-2 bg-blue-600 rounded-full animate-pulse" style={{ width: '100%' }}></div>
+      <div className="h-3 bg-retro-border-dark retro-sunken">
+        <div className="h-full bg-retro-green council-pulse" style={{ width: '100%' }}></div>
       </div>
     </Dialog>
   );
 }
-
