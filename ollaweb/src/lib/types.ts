@@ -70,6 +70,7 @@ export const AVAILABLE_MODELS = [
   { value: 'deepseek-r1:7b', label: 'Deepseek-R1 7B (7B|4.7GB) 💬', vision: false },
   { value: 'phi4-mini-reasoning:latest', label: 'Phi-4 Mini Reasoning (3.8B|2.2GB) 💬', vision: false },
   { value: 'qwen3-vl:4b', label: 'Qwen3-VL (4B|2.5GB) 💬👁️', vision: true },
+  { value: 'gpt-oss:20b', label: 'GPT-OSS (20B|12GB) 💬', vision: false },
 ] as const;
 
 export const DEFAULT_COUNCIL_MODELS: [string, string, string] = [

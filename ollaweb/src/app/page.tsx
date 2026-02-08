@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import Link from "next/link";
 import { useChat } from "ai/react";
 import { InstallDialog } from "./components/install-dialog";
 import { CodeBlock } from "./components/code-block";
@@ -604,7 +605,20 @@ export default function Chat() {
 
       <header className="sticky top-0 bg-retro-surface retro-raised z-10">
         <div className="retro-titlebar flex items-center justify-between">
-          <h1 className="text-retro-green text-lg tracking-wider">[OllaWeb v2.0]</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-retro-green text-lg tracking-wider">[OllaWeb v2.0]</h1>
+            <nav className="flex gap-1">
+              <span className="retro-sunken bg-retro-panel px-2 py-0.5 text-retro-green text-sm">
+                Chat
+              </span>
+              <Link
+                href="/resume"
+                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
+              >
+                Resume
+              </Link>
+            </nav>
+          </div>
           <div className="flex gap-2 text-retro-text text-sm items-center">
             <ChatHistory
               conversations={savedConversations}

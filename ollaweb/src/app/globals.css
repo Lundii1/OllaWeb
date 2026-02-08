@@ -203,8 +203,74 @@ details summary::marker {
   color: var(--retro-green) !important;
 }
 
+/* ===== RETRO TEXTAREA ===== */
+textarea {
+  background-color: var(--retro-bg) !important;
+  color: var(--retro-green) !important;
+  border: 2px solid !important;
+  border-color: var(--retro-border-dark) var(--retro-border-light) var(--retro-border-light) var(--retro-border-dark) !important;
+  border-radius: 0 !important;
+  font-family: var(--font-retro), 'Courier New', monospace !important;
+  font-size: 14px !important;
+  outline: none !important;
+  caret-color: var(--retro-green);
+}
+
+textarea:focus {
+  outline: 1px solid var(--retro-green) !important;
+  box-shadow: none !important;
+}
+
+textarea::placeholder {
+  color: #5a5a8c !important;
+  opacity: 1;
+}
+
+/* ===== CODEMIRROR RETRO OVERRIDES ===== */
+.cm-editor {
+  background: var(--retro-bg) !important;
+  height: 100% !important;
+}
+
+.cm-editor .cm-gutters {
+  background: var(--retro-surface) !important;
+  border-right: 2px solid var(--retro-border-dark) !important;
+  color: var(--retro-border-light) !important;
+}
+
+.cm-editor .cm-activeLineGutter {
+  background: var(--retro-surface) !important;
+  color: var(--retro-green) !important;
+}
+
+.cm-editor .cm-activeLine {
+  background: rgba(15, 52, 96, 0.3) !important;
+}
+
+.cm-editor .cm-cursor {
+  border-left-color: var(--retro-green) !important;
+}
+
+.cm-editor .cm-selectionBackground {
+  background: #0f3460 !important;
+}
+
+.cm-editor .cm-content {
+  font-family: 'Courier New', monospace !important;
+  caret-color: var(--retro-green) !important;
+}
+
 /* ===== RETRO SELECTION ===== */
 ::selection {
   background: #0f3460;
   color: var(--retro-green);
+}
+
+/* ===== DIFF VIEWER ===== */
+.diff-added {
+  background: rgba(57, 255, 20, 0.08);
+}
+
+.diff-removed {
+  background: rgba(255, 51, 51, 0.1);
 }
