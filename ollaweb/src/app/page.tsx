@@ -617,6 +617,12 @@ export default function Chat() {
               >
                 Resume
               </Link>
+              <Link
+                href="/finance"
+                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
+              >
+                Finance
+              </Link>
             </nav>
           </div>
           <div className="flex gap-2 text-retro-text text-sm items-center">

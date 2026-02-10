@@ -73,6 +73,48 @@ export const AVAILABLE_MODELS = [
   { value: 'gpt-oss:20b', label: 'GPT-OSS (20B|12GB) 💬', vision: false },
 ] as const;
 
+// ── Finance Types ─────────────────────────────────────────────────
+
+export interface ChartDataPoint {
+  time: number; // unix seconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface QuoteData {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  currency: string;
+}
+
+export type ChartPeriod = '1d' | '5d' | '1mo' | '3mo' | '1y' | '5y';
+
+export interface NewsItem {
+  title: string;
+  publisher: string;
+  link: string;
+  publishTime: number; // unix timestamp
+}
+
+export interface KeyMetrics {
+  marketCap: number | null;
+  peRatio: number | null;
+  forwardPE: number | null;
+  beta: number | null;
+  dividendYield: number | null;
+  fiftyTwoWeekHigh: number | null;
+  fiftyTwoWeekLow: number | null;
+  avgVolume: number | null;
+  targetPrice: number | null;
+  analystRating: string | null;
+}
+
 export const DEFAULT_COUNCIL_MODELS: [string, string, string] = [
   'llama3.2',
   'mistral',

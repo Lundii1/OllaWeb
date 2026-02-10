@@ -501,6 +501,12 @@ export default function ResumePage() {
               <span className="retro-sunken bg-retro-panel px-2 py-0.5 text-retro-green text-sm">
                 Resume
               </span>
+              <Link
+                href="/finance"
+                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
+              >
+                Finance
+              </Link>
             </nav>
           </div>
           <div className="flex gap-2 text-retro-text text-sm">
