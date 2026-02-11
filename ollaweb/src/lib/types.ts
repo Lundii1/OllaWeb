@@ -115,6 +115,142 @@ export interface KeyMetrics {
   analystRating: string | null;
 }
 
+// ── Watchlist Types ──────────────────────────────────────────────
+
+export interface WatchlistItem {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  volume: number;
+}
+
+// ── Technical Indicators Types ──────────────────────────────────
+
+export type IndicatorType = 'sma' | 'ema' | 'rsi' | 'macd' | 'bollinger';
+
+export interface IndicatorConfig {
+  sma: boolean;
+  ema: boolean;
+  rsi: boolean;
+  macd: boolean;
+  bollinger: boolean;
+}
+
+export interface MACDData {
+  time: number;
+  macd: number | null;
+  signal: number | null;
+  histogram: number | null;
+}
+
+export interface RSIData {
+  time: number;
+  value: number | null;
+}
+
+export interface BollingerData {
+  time: number;
+  upper: number | null;
+  middle: number | null;
+  lower: number | null;
+}
+
+export interface IndicatorLineData {
+  time: number;
+  value: number | null;
+}
+
+// ── Financial Statements Types ──────────────────────────────────
+
+export type StatementType = 'income' | 'balance' | 'cashflow';
+export type StatementPeriodType = 'annual' | 'quarterly';
+
+export interface FinancialStatementRow {
+  label: string;
+  key: string;
+  values: (number | null)[];
+}
+
+export interface FinancialStatementsData {
+  periods: string[];
+  rows: FinancialStatementRow[];
+}
+
+// ── Earnings Types ──────────────────────────────────────────────
+
+export interface EarningsHistoryItem {
+  quarter: string;
+  date: string;
+  epsEstimate: number | null;
+  epsActual: number | null;
+  surprise: number | null;
+  surprisePercent: number | null;
+}
+
+export interface EarningsTrendItem {
+  period: string;
+  endDate: string | null;
+  epsEstimate: number | null;
+  revenueEstimate: number | null;
+  growth: number | null;
+}
+
+export interface EarningsData {
+  nextEarningsDate: string | null;
+  history: EarningsHistoryItem[];
+  trend: EarningsTrendItem[];
+  epsRevisions: {
+    period: string;
+    upLast7: number | null;
+    upLast30: number | null;
+    downLast7: number | null;
+    downLast30: number | null;
+  }[];
+}
+
+// ── Analyst Types ───────────────────────────────────────────────
+
+export interface AnalystRecommendation {
+  strongBuy: number;
+  buy: number;
+  hold: number;
+  sell: number;
+  strongSell: number;
+  period: string;
+}
+
+export interface UpgradeDowngrade {
+  firm: string;
+  toGrade: string;
+  fromGrade: string;
+  action: string;
+  date: string;
+}
+
+export interface AnalystData {
+  recommendations: AnalystRecommendation[];
+  upgradeDowngradeHistory: UpgradeDowngrade[];
+  targetLow: number | null;
+  targetMean: number | null;
+  targetHigh: number | null;
+  targetMedian: number | null;
+  currentPrice: number | null;
+  numberOfAnalysts: number | null;
+}
+
+// ── Comparison Types ────────────────────────────────────────────
+
+export interface ComparisonTicker {
+  symbol: string;
+  data: ChartDataPoint[];
+  color: string;
+  changePercent: number;
+}
+
+export const COMPARISON_COLORS = ['#00d4ff', '#ffb000', '#ff3333', '#a855f7'] as const;
+
 export const DEFAULT_COUNCIL_MODELS: [string, string, string] = [
   'llama3.2',
   'mistral',
