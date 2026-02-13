@@ -6,7 +6,9 @@ import { LaTeXEditor } from '../components/latex-editor';
 import { PDFPreview } from '../components/pdf-preview';
 import { JobInput } from '../components/job-input';
 import { DiffViewer } from '../components/diff-viewer';
-import type { UserProfile } from '../../lib/resume-types';
+import { ResumeHistory } from '../components/resume-history';
+import type { UserProfile, ResumeVersion } from '../../lib/resume-types';
+import { listVersions, saveVersion, deleteVersion, generateVersionTitle } from '../../lib/resume-storage';
 
 const REQUIRED_MODELS = ['gpt-oss:20b'];
 
@@ -41,6 +43,11 @@ export default function ResumePage() {
   // Upload/extract state
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractStatus, setExtractStatus] = useState('');
+
+  // Version history state
+  const [currentVersionId, setCurrentVersionId] = useState<string | null>(null);
+  const [savedVersions, setSavedVersions] = useState<ResumeVersion[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Model pull state
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent: number; pulling: boolean; done: boolean; error: string | null }>>({});
@@ -156,6 +163,7 @@ export default function ResumePage() {
         if (data.latex) setLatex(data.latex);
       })
       .catch(() => {});
+    setSavedVersions(listVersions());
   }, []);
 
   // Save resume
@@ -166,6 +174,17 @@ export default function ResumePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ latex }),
       });
+      // Save version to history
+      const versionId = Date.now().toString();
+      const version: ResumeVersion = {
+        id: versionId,
+        title: generateVersionTitle('Saved'),
+        latex,
+        createdAt: Date.now(),
+      };
+      saveVersion(version);
+      setCurrentVersionId(versionId);
+      setSavedVersions(listVersions());
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -372,6 +391,17 @@ export default function ResumePage() {
     setIsReviewMode(false);
     setOriginalLatex(null);
     compileLatex(latex);
+    // Save tailored version to history
+    const versionId = Date.now().toString();
+    const version: ResumeVersion = {
+      id: versionId,
+      title: generateVersionTitle('Tailored'),
+      latex,
+      createdAt: Date.now(),
+    };
+    saveVersion(version);
+    setCurrentVersionId(versionId);
+    setSavedVersions(listVersions());
   }, [latex, compileLatex]);
 
   // Reject tailored changes — revert to original
@@ -484,6 +514,24 @@ export default function ResumePage() {
     a.click();
   }, [pdfUrl, buildFilename]);
 
+  // Version history handlers
+  const handleSelectVersion = useCallback((id: string) => {
+    const version = savedVersions.find(v => v.id === id);
+    if (version) {
+      setLatex(version.latex);
+      setCurrentVersionId(id);
+      setHistoryOpen(false);
+    }
+  }, [savedVersions]);
+
+  const handleDeleteVersion = useCallback((id: string) => {
+    deleteVersion(id);
+    setSavedVersions(listVersions());
+    if (currentVersionId === id) {
+      setCurrentVersionId(null);
+    }
+  }, [currentVersionId]);
+
   return (
     <div className="flex flex-col h-screen bg-retro-bg text-retro-text">
       {/* Header */}
@@ -509,7 +557,15 @@ export default function ResumePage() {
               </Link>
             </nav>
           </div>
-          <div className="flex gap-2 text-retro-text text-sm">
+          <div className="flex items-center gap-2 text-retro-text text-sm">
+            <ResumeHistory
+              versions={savedVersions}
+              currentVersionId={currentVersionId}
+              isOpen={historyOpen}
+              onToggle={() => setHistoryOpen(h => !h)}
+              onSelect={handleSelectVersion}
+              onDelete={handleDeleteVersion}
+            />
             <span className="retro-raised bg-retro-surface px-1 cursor-default">_</span>
             <span className="retro-raised bg-retro-surface px-1 cursor-default">[]</span>
             <span className="retro-raised bg-retro-surface px-1 cursor-default">X</span>
