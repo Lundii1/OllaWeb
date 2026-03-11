@@ -1,0 +1,12 @@
+﻿{
+  "manifest_version": 3,
+  "name": "OllaWeb Tailor",
+  "version": "0.1.0",
+  "description": "Send a job posting to OllaWeb and auto-tailor your resume.",
+  "action": {
+    "default_title": "Tailor with OllaWeb",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["http://localhost:3000/*"]
+}

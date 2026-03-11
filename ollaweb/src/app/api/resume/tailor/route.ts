@@ -11,7 +11,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Both latex and jobPosting are required' }, { status: 400 });
     }
 
-    const selectedModel = model || 'llama3.2';
+    const selectedModel = model || 'gpt-oss:20b';
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
 
         try {
           const result = await streamText({
-            model: ollama(selectedModel),
+            model: ollama(selectedModel, { numCtx: 8192 }),
             system: `You are a LaTeX resume tailoring expert. Given a LaTeX resume and a job posting, rewrite the resume LaTeX to better match the job requirements. Emphasize relevant skills and experience. Keep the LaTeX structure valid and compilable. Output ONLY the complete LaTeX document, no explanations or markdown code fences.`,
             messages: [
               {
@@ -58,3 +58,5 @@ export async function POST(req: Request) {
     return Response.json({ error: msg }, { status: 500 });
   }
 }
+
+

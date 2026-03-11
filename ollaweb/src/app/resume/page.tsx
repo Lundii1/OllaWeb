@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { LaTeXEditor } from '../components/latex-editor';
 import { PDFPreview } from '../components/pdf-preview';
 import { JobInput } from '../components/job-input';
@@ -14,6 +15,8 @@ const REQUIRED_MODELS = ['gpt-oss:20b'];
 
 export default function ResumePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchParams = useSearchParams();
+  const autoTailorEnabled = searchParams?.get('autoTailor') === '1';
 
   // Model check state
   const [modelCheck, setModelCheck] = useState<{
@@ -30,6 +33,10 @@ export default function ResumePage() {
   // Job tailoring
   const [jobPosting, setJobPosting] = useState('');
   const [isTailoring, setIsTailoring] = useState(false);
+  const [tailorError, setTailorError] = useState<string | null>(null);
+  const [autoTailorStatus, setAutoTailorStatus] = useState('');
+  const autoTailorFetchedRef = useRef(false);
+  const autoTailorTriggeredRef = useRef(false);
 
   // Compile/preview state
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -48,6 +55,7 @@ export default function ResumePage() {
   const [currentVersionId, setCurrentVersionId] = useState<string | null>(null);
   const [savedVersions, setSavedVersions] = useState<ResumeVersion[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+
 
   // Model pull state
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent: number; pulling: boolean; done: boolean; error: string | null }>>({});
@@ -144,7 +152,7 @@ export default function ResumePage() {
               ...prev,
               [modelName]: { status: data.status || 'Downloading...', percent, pulling: true, done: false, error: null },
             }));
-          } catch {}
+          } catch { }
         }
       }
     } catch (err) {
@@ -162,7 +170,7 @@ export default function ResumePage() {
       .then((data: UserProfile) => {
         if (data.latex) setLatex(data.latex);
       })
-      .catch(() => {});
+      .catch(() => { });
     setSavedVersions(listVersions());
   }, []);
 
@@ -281,12 +289,12 @@ export default function ResumePage() {
               setLatex(fullLatex);
             }
             if (data.error) {
-              setExtractStatus(`Error: ${data.error}${data.action ? ` — ${data.action}` : ''}`);
+              setExtractStatus(`Error: ${data.error}${data.action ? ` â€” ${data.action}` : ''}`);
             }
             if (data.done) {
               setExtractStatus('');
             }
-          } catch {}
+          } catch { }
         }
       }
       // Flush remaining buffer
@@ -298,12 +306,12 @@ export default function ResumePage() {
             setLatex(fullLatex);
           }
           if (data.error) {
-            setExtractStatus(`Error: ${data.error}${data.action ? ` — ${data.action}` : ''}`);
+            setExtractStatus(`Error: ${data.error}${data.action ? ` â€” ${data.action}` : ''}`);
           }
           if (data.done) {
             setExtractStatus('');
           }
-        } catch {}
+        } catch { }
       }
       // Auto-compile after extraction
       if (fullLatex.trim()) {
@@ -322,6 +330,7 @@ export default function ResumePage() {
     if (!latex || !jobPosting.trim()) return;
 
     setIsTailoring(true);
+    setTailorError(null);
     setOriginalLatex(latex); // Snapshot for diff review
 
     try {
@@ -334,6 +343,7 @@ export default function ResumePage() {
       if (!response.ok) {
         const err = await response.json();
         console.error('Tailor error:', err);
+        setTailorError(err.error || 'Failed to start tailoring');
         setOriginalLatex(null);
         setIsTailoring(false);
         return;
@@ -341,6 +351,7 @@ export default function ResumePage() {
 
       const reader = response.body?.getReader();
       if (!reader) {
+        setTailorError('Failed to read response stream');
         setOriginalLatex(null);
         return;
       }
@@ -348,6 +359,7 @@ export default function ResumePage() {
       const decoder = new TextDecoder();
       let buffer = '';
       let newLatex = '';
+      let streamError = '';
 
       while (true) {
         const { value, done } = await reader.read();
@@ -365,9 +377,33 @@ export default function ResumePage() {
               newLatex += data.text;
               setLatex(newLatex);
             }
-          } catch {}
+            if (data.error) {
+              streamError = data.error + (data.action ? ` — ${data.action}` : '');
+            }
+          } catch { }
         }
       }
+
+      // Flush buffer
+      if (buffer.trim().startsWith('data: ')) {
+        try {
+          const data = JSON.parse(buffer.trim().slice(6));
+          if (data.text) {
+            newLatex += data.text;
+            setLatex(newLatex);
+          }
+          if (data.error) {
+            streamError = data.error + (data.action ? ` — ${data.action}` : '');
+          }
+        } catch { }
+      }
+
+      if (streamError) {
+        setTailorError(streamError);
+        setOriginalLatex(null);
+        return; // Don't compile or review if there was an error
+      }
+
       // Enter diff review mode (or auto-accept if no changes)
       if (newLatex.trim()) {
         if (newLatex.trim() === latex.trim()) {
@@ -380,11 +416,71 @@ export default function ResumePage() {
       }
     } catch (err) {
       console.error('Tailor error:', err);
+      setTailorError(err instanceof Error ? err.message : 'Unknown tailoring error');
       setOriginalLatex(null);
     } finally {
       setIsTailoring(false);
     }
   }, [latex, jobPosting, model, compileLatex]);
+
+  // Auto-tailor: fetch job posting from extension
+  useEffect(() => {
+    if (!autoTailorEnabled || autoTailorFetchedRef.current) return;
+    autoTailorFetchedRef.current = true;
+    setAutoTailorStatus('Fetching job posting from extension...');
+
+    fetch('/api/extension/job?consume=1', { cache: 'no-store' })
+      .then(async (r) => {
+        if (!r.ok) {
+          if (r.status === 404) {
+            throw new Error('No job posting found from extension.');
+          }
+          const err = await r.json().catch(() => null);
+          throw new Error(err?.error || 'Failed to read job posting.');
+        }
+        return r.json();
+      })
+      .then((data) => {
+        if (data?.jobPosting) {
+          setJobPosting(data.jobPosting);
+          setAutoTailorStatus('Job posting loaded.');
+        } else {
+          setAutoTailorStatus('No job posting found from extension.');
+        }
+      })
+      .catch((err) => {
+        setAutoTailorStatus(
+          `Extension handoff failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+        );
+      });
+  }, [autoTailorEnabled]);
+
+  // Auto-tailor: trigger once when resume and job posting are ready
+  useEffect(() => {
+    if (!autoTailorEnabled) return;
+    if (autoTailorTriggeredRef.current) return;
+    if (!jobPosting.trim()) return;
+
+    if (!latex.trim()) {
+      setAutoTailorStatus('Resume is empty. Load or paste your resume, then click Tailor.');
+      return;
+    }
+
+    autoTailorTriggeredRef.current = true;
+    setAutoTailorStatus('Auto tailoring from extension...');
+    
+    // First compile the existing PDF, then start tailoring
+    compileLatex(latex).then(() => {
+      handleTailor();
+    });
+  }, [autoTailorEnabled, jobPosting, latex, handleTailor, compileLatex]);
+
+  useEffect(() => {
+    if (!isTailoring) return;
+    if (autoTailorStatus) setAutoTailorStatus('');
+  }, [isTailoring, autoTailorStatus]);
+
+
 
   // Accept tailored changes
   const handleAcceptTailored = useCallback(() => {
@@ -464,8 +560,8 @@ export default function ResumePage() {
       // Company: look for "at <Company>", "Company:", or "company name" patterns
       const companyPatterns = [
         /(?:at|@)\s+([A-Z][A-Za-z0-9&. ]+?)(?:\s*[,.\n-])/,
-        /[Cc]ompany\s*[:：]\s*([A-Za-z0-9&. ]+?)(?:\s*[,.\n])/,
-        /^([A-Z][A-Za-z0-9&. ]+?)(?:\s*[-–|])/m,
+        /[Cc]ompany\s*[:ï¼š]\s*([A-Za-z0-9&. ]+?)(?:\s*[,.\n])/,
+        /^([A-Z][A-Za-z0-9&. ]+?)(?:\s*[-â€“|])/m,
       ];
       for (const pat of companyPatterns) {
         const m = jobPosting.match(pat);
@@ -477,7 +573,7 @@ export default function ResumePage() {
 
       // Role: look for job title patterns
       const rolePatterns = [
-        /(?:title|role|position)\s*[:：]\s*([^\n,]+)/i,
+        /(?:title|role|position)\s*[:ï¼š]\s*([^\n,]+)/i,
         /(?:seeking|hiring|looking for)\s+(?:a |an )?([^\n,.]+)/i,
         /^([A-Z][A-Za-z ]+(?:Engineer|Developer|Designer|Manager|Analyst|Scientist|Architect|Intern|Lead|Director|Consultant|Specialist|Coordinator))/im,
         /([A-Za-z ]+(?:Engineer|Developer|Designer|Manager|Analyst|Scientist|Architect|Intern|Lead|Director|Consultant|Specialist|Coordinator))/i,
@@ -576,211 +672,211 @@ export default function ResumePage() {
       {/* Model check overlay */}
       {(modelCheck.checking || modelCheck.missing.length > 0 || modelCheck.error) && (
         <div className="flex-1 flex items-center justify-center">
-          <div className="retro-raised bg-retro-surface p-6 max-w-lg text-center">
-            {modelCheck.checking ? (
-              <>
-                <p className="text-retro-cyan retro-blink text-lg mb-2">Checking required models...</p>
-                <p className="text-retro-border-light text-sm">Connecting to Ollama</p>
-              </>
-            ) : modelCheck.error ? (
-              <>
-                <p className="text-retro-red text-lg mb-2">[ERROR]</p>
-                <p className="text-retro-text mb-4">{modelCheck.error}</p>
-                <p className="text-retro-border-light text-sm">Make sure Ollama is running: <span className="text-retro-cyan">ollama serve</span></p>
-              </>
-            ) : (
-              <>
-                <p className="text-retro-amber text-lg mb-3">[MISSING MODELS]</p>
-                <p className="text-retro-text mb-4">The following models are required but not installed:</p>
-                <div className="space-y-3 mb-4">
-                  {modelCheck.missing.map((m) => {
-                    const progress = pullProgress[m];
-                    const isPulling = progress?.pulling;
-                    const isDone = progress?.done;
-                    const hasError = progress?.error;
+          <div className="retro-raised bg-retro-surface p-6 max-w-lg text-center">          {modelCheck.checking ? (
+            <>
+              <p className="text-retro-cyan retro-blink text-lg mb-2">Checking required models...</p>
+              <p className="text-retro-border-light text-sm">Connecting to Ollama</p>
+            </>
+          ) : modelCheck.error ? (
+            <>
+              <p className="text-retro-red text-lg mb-2">[ERROR]</p>
+              <p className="text-retro-text mb-4">{modelCheck.error}</p>
+              <p className="text-retro-border-light text-sm">Make sure Ollama is running: <span className="text-retro-cyan">ollama serve</span></p>
+            </>
+          ) : (
+            <>
+              <p className="text-retro-amber text-lg mb-3">[MISSING MODELS]</p>
+              <p className="text-retro-text mb-4">The following models are required but not installed:</p>
+              <div className="space-y-3 mb-4">
+                {modelCheck.missing.map((m) => {
+                  const progress = pullProgress[m];
+                  const isPulling = progress?.pulling;
+                  const isDone = progress?.done;
+                  const hasError = progress?.error;
 
-                    return (
-                      <div key={m} className="retro-sunken bg-retro-bg px-3 py-2 text-sm">
-                        <div className="flex items-center justify-between mb-1">
-                          <div>
-                            <span className={isDone ? 'text-retro-green' : 'text-retro-red'}>{isDone ? '✓' : '✗'}</span>{' '}
-                            <span className="text-retro-text-bright">{m}</span>
-                          </div>
-                          {!isPulling && !isDone && (
-                            <button
-                              type="button"
-                              onClick={() => handlePullModel(m)}
-                              className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-xs hover:bg-retro-blue hover:text-retro-text-bright"
-                            >
-                              [DOWNLOAD]
-                            </button>
-                          )}
+                  return (
+                    <div key={m} className="retro-sunken bg-retro-bg px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between mb-1">
+                        <div>
+                          <span className={isDone ? 'text-retro-green' : 'text-retro-red'}>{isDone ? 'âœ“' : 'âœ—'}</span>{' '}
+                          <span className="text-retro-text-bright">{m}</span>
                         </div>
-                        {isPulling && (
-                          <div>
-                            <div className="flex items-center gap-2 mb-1">
-                              <div className="flex-1 retro-sunken bg-retro-bg h-3 overflow-hidden">
-                                <div
-                                  className="h-full bg-retro-cyan transition-all duration-300"
-                                  style={{ width: `${progress.percent}%` }}
-                                />
-                              </div>
-                              <span className="text-retro-cyan text-xs w-10 text-right">{progress.percent}%</span>
-                            </div>
-                            <p className="text-retro-border-light text-xs">{progress.status}</p>
-                          </div>
-                        )}
-                        {isDone && (
-                          <p className="text-retro-green text-xs">Downloaded successfully!</p>
-                        )}
-                        {hasError && (
-                          <p className="text-retro-red text-xs">Error: {progress.error}</p>
+                        {!isPulling && !isDone && (
+                          <button
+                            type="button"
+                            onClick={() => handlePullModel(m)}
+                            className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-xs hover:bg-retro-blue hover:text-retro-text-bright"
+                          >
+                            [DOWNLOAD]
+                          </button>
                         )}
                       </div>
-                    );
-                  })}
-                </div>
-                {modelCheck.missing.some((m) => !pullProgress[m]?.pulling && !pullProgress[m]?.done) && (
-                  <button
-                    type="button"
-                    onClick={() => modelCheck.missing.forEach((m) => { if (!pullProgress[m]?.pulling && !pullProgress[m]?.done) handlePullModel(m); })}
-                    className="retro-raised bg-retro-panel text-retro-green px-4 py-1.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright mb-2"
-                  >
-                    [DOWNLOAD ALL]
-                  </button>
-                )}
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => checkModels()}
-                    className="retro-raised bg-retro-panel text-retro-text px-4 py-1.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright"
-                  >
-                    [RETRY]
-                  </button>
-                </div>
-              </>
-            )}
+                      {isPulling && (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="flex-1 retro-sunken bg-retro-bg h-3 overflow-hidden">
+                              <div
+                                className="h-full bg-retro-cyan transition-all duration-300"
+                                style={{ width: `${progress.percent}%` }}
+                              />
+                            </div>
+                            <span className="text-retro-cyan text-xs w-10 text-right">{progress.percent}%</span>
+                          </div>
+                          <p className="text-retro-border-light text-xs">{progress.status}</p>
+                        </div>
+                      )}
+                      {isDone && (
+                        <p className="text-retro-green text-xs">Downloaded successfully!</p>
+                      )}
+                      {hasError && (
+                        <p className="text-retro-red text-xs">Error: {progress.error}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {modelCheck.missing.some((m) => !pullProgress[m]?.pulling && !pullProgress[m]?.done) && (
+                <button
+                  type="button"
+                  onClick={() => modelCheck.missing.forEach((m) => { if (!pullProgress[m]?.pulling && !pullProgress[m]?.done) handlePullModel(m); })}
+                  className="retro-raised bg-retro-panel text-retro-green px-4 py-1.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright mb-2"
+                >
+                  [DOWNLOAD ALL]
+                </button>
+              )}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => checkModels()}
+                  className="retro-raised bg-retro-panel text-retro-text px-4 py-1.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright"
+                >
+                  [RETRY]
+                </button>
+              </div>
+            </>
+          )}
           </div>
         </div>
       )}
 
       {/* Main content — 3 columns */}
       {!modelCheck.checking && modelCheck.missing.length === 0 && !modelCheck.error && (
-      <main className="flex-1 flex overflow-hidden">
-        {/* Left panel: Save + Job */}
-        <div className="w-72 shrink-0 bg-retro-surface retro-raised flex flex-col overflow-y-auto">
-          {/* Save resume */}
-          <div className="p-3 border-b border-retro-border">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={!latex.trim()}
-              className="retro-raised bg-retro-panel text-retro-green px-3 py-1 text-sm w-full hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-            >
-              {saved ? '[SAVED!]' : '[SAVE RESUME]'}
-            </button>
-          </div>
-
-          {/* Job Input section */}
-          <div className="p-3 flex-1">
-            <JobInput
-              jobPosting={jobPosting}
-              onJobPostingChange={setJobPosting}
-              onTailor={handleTailor}
-              isTailoring={isTailoring}
-              disabled={!latex.trim() || isReviewMode}
-            />
-          </div>
-        </div>
-
-        {/* Center panel: LaTeX Editor */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Editor toolbar */}
-          <div className="bg-retro-surface retro-raised px-3 py-1.5 flex items-center gap-2 shrink-0">
-            <span className="text-retro-amber text-sm">
-              {isReviewMode ? '[DIFF REVIEW]' : '[LATEX EDITOR]'}
-            </span>
-            <div className="flex-1" />
-
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={handleUploadPDF}
-              ref={fileInputRef}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isExtracting || isReviewMode}
-              className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-            >
-              {isExtracting ? '[EXTRACTING...]' : '[UPLOAD PDF]'}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCompile}
-              disabled={isCompiling || !latex.trim() || isReviewMode}
-              className="retro-raised bg-retro-panel text-retro-green px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-            >
-              {isCompiling ? '[COMPILING...]' : '[COMPILE]'}
-            </button>
-
-            {pdfUrl && (
+        <main className="flex-1 flex overflow-hidden">
+          {/* Left panel: Save + Job */}
+          <div className="w-72 shrink-0 bg-retro-surface retro-raised flex flex-col overflow-y-auto">
+            {/* Save resume */}
+            <div className="p-3 border-b border-retro-border">
               <button
                 type="button"
-                onClick={handleDownload}
-                disabled={isReviewMode}
-                className="retro-raised bg-retro-panel text-retro-amber px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
+                onClick={handleSave}
+                disabled={!latex.trim()}
+                className="retro-raised bg-retro-panel text-retro-green px-3 py-1 text-sm w-full hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
               >
-                [DOWNLOAD]
+                {saved ? '[SAVED!]' : '[SAVE RESUME]'}
               </button>
-            )}
+            </div>
+            <div className="p-3 flex-1">
+              <JobInput
+                jobPosting={jobPosting}
+                onJobPostingChange={setJobPosting}
+                onTailor={handleTailor}
+                isTailoring={isTailoring}
+                disabled={!latex.trim() || isReviewMode}
+                tailorError={tailorError}
+              />
+            </div>
           </div>
 
-          {/* Status bar */}
-          {(extractStatus || isTailoring || isReviewMode) && (
-            <div className="bg-retro-bg px-3 py-1 text-sm shrink-0">
-              {extractStatus && <span className="text-retro-cyan">{extractStatus}</span>}
-              {isTailoring && <span className="text-retro-amber retro-blink">Tailoring resume for job posting...</span>}
-              {isReviewMode && !isTailoring && (
-                <span className="text-retro-cyan">Review changes below. [ACCEPT] to keep tailored version, [REJECT] to revert.</span>
+          {/* Center panel: LaTeX Editor */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Editor toolbar */}
+            <div className="bg-retro-surface retro-raised px-3 py-1.5 flex items-center gap-2 shrink-0">
+              <span className="text-retro-amber text-sm">
+                {isReviewMode ? '[DIFF REVIEW]' : '[LATEX EDITOR]'}
+              </span>
+              <div className="flex-1" />
+
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={handleUploadPDF}
+                ref={fileInputRef}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isExtracting || isReviewMode}
+                className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
+              >
+                {isExtracting ? '[EXTRACTING...]' : '[UPLOAD PDF]'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCompile}
+                disabled={isCompiling || !latex.trim() || isReviewMode}
+                className="retro-raised bg-retro-panel text-retro-green px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
+              >
+                {isCompiling ? '[COMPILING...]' : '[COMPILE]'}
+              </button>
+
+              {pdfUrl && (
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  disabled={isReviewMode}
+                  className="retro-raised bg-retro-panel text-retro-amber px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
+                >
+                  [DOWNLOAD]
+                </button>
               )}
             </div>
-          )}
 
-          {/* Editor or Diff Review */}
-          <div className="flex-1 overflow-hidden">
-            {isReviewMode && originalLatex !== null ? (
-              <DiffViewer
-                originalText={originalLatex}
-                modifiedText={latex}
-                onAccept={handleAcceptTailored}
-                onReject={handleRejectTailored}
-              />
-            ) : (
-              <LaTeXEditor
-                value={latex}
-                onChange={setLatex}
-                readOnly={isExtracting || isTailoring}
-              />
+            {/* Status bar */}
+            {(extractStatus || isTailoring || isReviewMode || autoTailorStatus) && (
+              <div className="bg-retro-bg px-3 py-1 text-sm shrink-0">
+                {autoTailorStatus && <span className="text-retro-cyan mr-2">{autoTailorStatus}</span>}
+                {extractStatus && <span className="text-retro-cyan">{extractStatus}</span>}
+                {isTailoring && <span className="text-retro-amber retro-blink">Tailoring resume for job posting...</span>}
+                {isReviewMode && !isTailoring && (
+                  <span className="text-retro-cyan">Review changes below. [ACCEPT] to keep tailored version, [REJECT] to revert.</span>
+                )}
+              </div>
             )}
-          </div>
-        </div>
 
-        {/* Right panel: PDF Preview */}
-        <div className="w-[750px] shrink-0 flex flex-col">
-          <div className="flex-1">
-            <PDFPreview
-              pdfUrl={pdfUrl}
-              isCompiling={isCompiling}
-              error={compileError}
-            />
+            {/* Editor or Diff Review */}
+            <div className="flex-1 overflow-hidden">
+              {isReviewMode && originalLatex !== null ? (
+                <DiffViewer
+                  originalText={originalLatex}
+                  modifiedText={latex}
+                  onAccept={handleAcceptTailored}
+                  onReject={handleRejectTailored}
+                />
+              ) : (
+                <LaTeXEditor
+                  value={latex}
+                  onChange={setLatex}
+                  readOnly={isExtracting || isTailoring}
+                />
+              )}
+            </div>
           </div>
-        </div>
-      </main>
+
+          {/* Right panel: PDF Preview */}
+          <div className="w-[750px] shrink-0 flex flex-col">
+            <div className="flex-1">
+              <PDFPreview
+                pdfUrl={pdfUrl}
+                isCompiling={isCompiling}
+                error={compileError}
+              />
+            </div>
+          </div>
+        </main>
       )}
     </div>
   );
 }
+
