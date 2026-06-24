@@ -1,14 +1,33 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { Suspense, useState, useCallback, useRef, useEffect } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { 
+  Search, 
+  TrendingUp, 
+  MessageSquare, 
+  BarChart4, 
+  Newspaper, 
+  AlertCircle, 
+  X, 
+  Send,
+  Share2,
+  Check,
+  Briefcase,
+  BarChart3,
+  Clock,
+  DollarSign
+} from "lucide-react";
 import { StockChart } from '../components/stock-chart';
 import { Watchlist } from '../components/watchlist';
+import { AppNav } from '../components/app-nav';
 import { FinancialStatements } from '../components/financial-statements';
 import { EarningsPanel } from '../components/earnings-panel';
 import { AnalystPanel } from '../components/analyst-panel';
 import { CodeBlock } from '../components/code-block';
 import { AVAILABLE_MODELS, COMPARISON_COLORS } from '../../lib/types';
+import { trackGrowthMetric } from '../../lib/growth-metrics';
 import type { ChartDataPoint, QuoteData, ChartPeriod, NewsItem, KeyMetrics, IndicatorConfig, ComparisonTicker } from '../../lib/types';
 
 const PERIODS: ChartPeriod[] = ['1d', '5d', '1mo', '3mo', '1y', '5y'];
@@ -18,6 +37,7 @@ const PERIOD_LABELS: Record<ChartPeriod, string> = {
 
 type BottomTab = 'chat' | 'financials' | 'news';
 type RightTab = 'metrics' | 'earnings' | 'analyst';
+type ShareStatus = 'idle' | 'copied' | 'error';
 
 interface ChatMessage {
   id: string;
@@ -56,7 +76,9 @@ const DEFAULT_INDICATORS: IndicatorConfig = {
   sma: false, ema: false, rsi: false, macd: false, bollinger: false,
 };
 
-export default function FinancePage() {
+function FinancePageContent() {
+  const searchParams = useSearchParams();
+
   // Stock state
   const [ticker, setTicker] = useState('');
   const [activeTicker, setActiveTicker] = useState('');
@@ -76,7 +98,7 @@ export default function FinancePage() {
   const financialsDataRef = useRef<any>(null);
 
   // Chat state
-  const [model, setModel] = useState('llama3.2');
+  const [model, setModel] = useState('gemma4:e4b');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isResponding, setIsResponding] = useState(false);
@@ -94,9 +116,12 @@ export default function FinancePage() {
   // Tab state
   const [bottomTab, setBottomTab] = useState<BottomTab>('chat');
   const [rightTab, setRightTab] = useState<RightTab>('metrics');
+  const [shareStatus, setShareStatus] = useState<ShareStatus>('idle');
+  const [shareBanner, setShareBanner] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const sharedLinkAppliedRef = useRef(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -160,26 +185,65 @@ export default function FinancePage() {
     }
   }, []);
 
-  const handleLoadTicker = useCallback(() => {
-    if (!ticker.trim()) return;
+  const resetTickerContext = useCallback(() => {
     setMessages([]);
     setComparisonData([]);
     earningsDataRef.current = null;
     analystDataRef.current = null;
     financialsDataRef.current = null;
+  }, []);
+
+  const handleLoadTicker = useCallback(() => {
+    if (!ticker.trim()) return;
+    resetTickerContext();
     fetchQuote(ticker.trim(), period);
-  }, [ticker, period, fetchQuote]);
+  }, [ticker, period, fetchQuote, resetTickerContext]);
 
   // Load ticker from watchlist
   const handleWatchlistSelect = useCallback((symbol: string) => {
     setTicker(symbol);
-    setMessages([]);
-    setComparisonData([]);
-    earningsDataRef.current = null;
-    analystDataRef.current = null;
-    financialsDataRef.current = null;
+    resetTickerContext();
     fetchQuote(symbol, period);
-  }, [period, fetchQuote]);
+  }, [period, fetchQuote, resetTickerContext]);
+
+  useEffect(() => {
+    if (sharedLinkAppliedRef.current || !searchParams) return;
+
+    const sharedTicker = searchParams.get('sym')?.trim().toUpperCase();
+    if (!sharedTicker || !/^[A-Z0-9.\-^]{1,10}$/.test(sharedTicker)) return;
+
+    const sharedPeriod = searchParams.get('p');
+    const parsedPeriod = sharedPeriod && PERIODS.includes(sharedPeriod as ChartPeriod)
+      ? sharedPeriod as ChartPeriod
+      : '1mo';
+    const sharedPrompt = searchParams.get('q')?.trim();
+
+    sharedLinkAppliedRef.current = true;
+    setTicker(sharedTicker);
+    setPeriod(parsedPeriod);
+    resetTickerContext();
+    fetchQuote(sharedTicker, parsedPeriod);
+
+    if (sharedPrompt) {
+      setBottomTab('chat');
+      setChatInput(sharedPrompt.slice(0, 500));
+    }
+
+    setShareBanner(sharedPrompt
+      ? `Loaded shared setup for ${sharedTicker} with a ready-to-run prompt.`
+      : `Loaded shared setup for ${sharedTicker}.`);
+    trackGrowthMetric('share_link_opened', {
+      ticker: sharedTicker,
+      period: parsedPeriod,
+      hasPrompt: Boolean(sharedPrompt),
+    });
+  }, [searchParams, fetchQuote, resetTickerContext]);
+
+  useEffect(() => {
+    if (!shareBanner) return;
+    const timer = setTimeout(() => setShareBanner(null), 4500);
+    return () => clearTimeout(timer);
+  }, [shareBanner]);
 
   const handlePeriodChange = useCallback((p: ChartPeriod) => {
     setPeriod(p);
@@ -240,6 +304,45 @@ export default function FinancePage() {
   const removeComparison = useCallback((symbol: string) => {
     setComparisonData(prev => prev.filter(c => c.symbol !== symbol));
   }, []);
+
+  const handleShareSetup = useCallback(async () => {
+    if (!activeTicker || typeof window === 'undefined') return;
+
+    const latestUserPrompt = [...messages]
+      .reverse()
+      .find((m) => m.role === 'user')
+      ?.content
+      ?.trim();
+    const promptToShare = (latestUserPrompt || chatInput.trim()).slice(0, 500);
+
+    const shareUrl = new URL('/finance', window.location.origin);
+    shareUrl.searchParams.set('sym', activeTicker);
+    shareUrl.searchParams.set('p', period);
+    if (promptToShare) {
+      shareUrl.searchParams.set('q', promptToShare);
+    }
+
+    try {
+      await navigator.clipboard.writeText(shareUrl.toString());
+      setShareStatus('copied');
+      setShareBanner('Share link copied. Teammates will land on this ticker and prompt.');
+      trackGrowthMetric('share_link_created', {
+        ticker: activeTicker,
+        period,
+        hasPrompt: Boolean(promptToShare),
+      });
+    } catch (err) {
+      console.error('Failed to copy share link:', err);
+      setShareStatus('error');
+      setShareBanner('Could not copy share link. Check clipboard permissions.');
+    }
+  }, [activeTicker, messages, chatInput, period]);
+
+  useEffect(() => {
+    if (shareStatus === 'idle') return;
+    const timer = setTimeout(() => setShareStatus('idle'), 2500);
+    return () => clearTimeout(timer);
+  }, [shareStatus]);
 
   // Send chat message
   const handleSendMessage = useCallback(async () => {
@@ -320,7 +423,7 @@ export default function FinancePage() {
     } finally {
       setIsResponding(false);
     }
-  }, [chatInput, isResponding, messages, model, activeTicker]);
+  }, [chatInput, isResponding, messages, model, activeTicker, quoteData, metrics, news]);
 
   const renderMessageContent = (content: string) => {
     return content.split(/(```[\s\S]*?```|<think>[\s\S]*?<\/think>)/g).map((part, index) => {
@@ -334,7 +437,7 @@ export default function FinancePage() {
         const thinkContent = part.trim().slice(7, -8);
         if (thinkContent.length <= 2) return null;
         return (
-          <div key={index} className="bg-retro-surface retro-sunken p-2 italic text-retro-amber">
+          <div key={index} className="bg-[#2f2f2f] border border-[#404040] rounded-lg p-2.5 italic text-amber-400/90 text-sm">
             {'[Thinking] ' + thinkContent}
           </div>
         );
@@ -347,8 +450,8 @@ export default function FinancePage() {
 
   const MetricRow = ({ label, value }: { label: string; value: string }) => (
     <div className="flex justify-between items-center py-0.5">
-      <span className="text-retro-amber text-xs">{label}</span>
-      <span className="text-retro-text-bright text-xs font-mono">{value}</span>
+      <span className="text-amber-400/90 text-xs">{label}</span>
+      <span className="text-foreground text-xs font-mono">{value}</span>
     </div>
   );
 
@@ -357,10 +460,10 @@ export default function FinancePage() {
     <button
       type="button"
       onClick={onClick}
-      className={`px-1.5 py-0.5 text-[10px] ${
+      className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
         active
-          ? 'retro-sunken bg-retro-panel'
-          : 'retro-raised bg-retro-surface text-retro-text hover:text-retro-text-bright'
+          ? 'bg-[#404040] text-foreground'
+          : 'bg-[#2f2f2f] text-muted-foreground hover:text-foreground hover:bg-[#3a3a3a] border border-[#404040]'
       }`}
       style={active ? { color } : undefined}
     >
@@ -369,425 +472,444 @@ export default function FinancePage() {
   );
 
   return (
-    <div className="flex flex-col h-screen bg-retro-bg text-retro-text">
-      {/* Header */}
-      <header className="sticky top-0 bg-retro-surface retro-raised z-10 shrink-0">
-        <div className="retro-titlebar flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-retro-green text-lg tracking-wider">[OllaWeb v2.0]</h1>
-            <nav className="flex gap-1">
-              <Link
-                href="/"
-                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
-              >
-                Chat
-              </Link>
-              <Link
-                href="/resume"
-                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
-              >
-                Resume
-              </Link>
-              <span className="retro-sunken bg-retro-panel px-2 py-0.5 text-retro-green text-sm">
-                Finance
-              </span>
-            </nav>
-          </div>
-          <div className="flex gap-2 text-retro-text text-sm">
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">_</span>
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">[]</span>
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">X</span>
-          </div>
-        </div>
-      </header>
+    <div className="flex h-screen bg-[#0a0a0a] text-foreground font-sans selection:bg-white/10 overflow-hidden relative">
+      <Watchlist
+        onSelectTicker={handleWatchlistSelect}
+        activeTicker={activeTicker}
+        collapsed={watchlistCollapsed}
+        onToggleCollapse={() => setWatchlistCollapsed(prev => !prev)}
+      />
 
-      {/* Ticker toolbar */}
-      <div className="bg-retro-surface retro-raised px-4 py-2 flex items-center gap-3 shrink-0 flex-wrap">
-        <span className="text-retro-amber text-sm">Ticker:</span>
-        <input
-          type="text"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value.toUpperCase())}
-          onKeyDown={(e) => e.key === 'Enter' && handleLoadTicker()}
-          placeholder="AAPL"
-          className="retro-sunken bg-retro-bg text-retro-green px-2 py-0.5 text-sm w-28 outline-none uppercase"
-        />
-        <button
-          type="button"
-          onClick={handleLoadTicker}
-          disabled={!ticker.trim() || chartLoading}
-          className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-        >
-          {chartLoading ? '[LOADING...]' : '[LOAD]'}
-        </button>
+      <div className="flex-1 flex flex-col min-w-0 bg-[#0a0a0a] relative z-10">
+        {/* Ticker Toolbar */}
+        <header className="h-16 border-b border-[#333] flex items-center justify-between px-6 bg-[#0a0a0a]/50 backdrop-blur-md z-30 shrink-0">
+          <div className="flex items-center gap-4 flex-1">
+             <Link href="/" className="w-8 h-8 rounded-lg bg-white text-black flex items-center justify-center font-bold text-lg hover:scale-105 transition-transform shrink-0">V</Link>
+             <AppNav current="finance" />
+             <div className="h-6 w-[1px] bg-[#333]" />
+             <div className="flex items-center gap-2 bg-[#171717] border border-[#333] rounded-xl px-3 py-1.5 focus-within:ring-1 focus-within:ring-white/20 transition-all">
+                <span className="text-muted-foreground"><Search size={16} /></span>
+                <input
+                  type="text"
+                  value={ticker}
+                  onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLoadTicker()}
+                  placeholder="Enter ticker (e.g. AAPL)"
+                  className="bg-transparent border-none outline-none text-sm w-32 uppercase font-medium placeholder:text-muted-foreground/30"
+                />
+             </div>
+             
+             <button
+               onClick={handleLoadTicker}
+               disabled={!ticker.trim() || chartLoading}
+               className="h-10 px-4 bg-white text-black rounded-xl text-sm font-semibold hover:bg-neutral-200 transition-all disabled:opacity-30"
+             >
+                {chartLoading ? 'Loading...' : 'Load'}
+             </button>
 
-        <div className="flex gap-1 ml-3">
-          {PERIODS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => handlePeriodChange(p)}
-              disabled={!activeTicker}
-              className={`px-2 py-0.5 text-xs ${
-                period === p
-                  ? 'retro-sunken bg-retro-panel text-retro-green'
-                  : 'retro-raised bg-retro-surface text-retro-text hover:bg-retro-panel hover:text-retro-text-bright'
-              } disabled:opacity-40`}
-            >
-              {PERIOD_LABELS[p]}
-            </button>
-          ))}
-        </div>
+             <button
+               onClick={handleShareSetup}
+               disabled={!activeTicker}
+               className="h-10 px-3 rounded-xl text-xs font-bold uppercase tracking-wider border border-[#333] bg-[#171717] hover:bg-[#212121] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+               title={activeTicker ? 'Copy a link that preloads this ticker setup' : 'Load a ticker first'}
+             >
+               {shareStatus === 'copied' ? <Check size={14} className="text-green-400" /> : <Share2 size={14} />}
+               {shareStatus === 'copied' ? 'Copied' : shareStatus === 'error' ? 'Retry Share' : 'Share Setup'}
+             </button>
 
-        {/* Indicators toolbar */}
-        {activeTicker && comparisonData.length === 0 && (
-          <div className="flex gap-1 ml-2 items-center">
-            <span className="text-retro-border-light text-[10px] mr-1">IND:</span>
-            <IndicatorBtn label="SMA" active={indicators.sma} color="#00d4ff" onClick={() => toggleIndicator('sma')} />
-            <IndicatorBtn label="EMA" active={indicators.ema} color="#ffb000" onClick={() => toggleIndicator('ema')} />
-            <IndicatorBtn label="BB" active={indicators.bollinger} color="#4488ff" onClick={() => toggleIndicator('bollinger')} />
-            <IndicatorBtn label="RSI" active={indicators.rsi} color="#a855f7" onClick={() => toggleIndicator('rsi')} />
-            <IndicatorBtn label="MACD" active={indicators.macd} color="#00d4ff" onClick={() => toggleIndicator('macd')} />
-          </div>
-        )}
+             <div className="h-6 w-[1px] bg-[#333] mx-2" />
 
-        {/* Comparison input */}
-        {activeTicker && (
-          <div className="flex gap-1 ml-2 items-center">
-            <span className="text-retro-border-light text-[10px] mr-1">CMP:</span>
-            <input
-              type="text"
-              value={compareInput}
-              onChange={e => setCompareInput(e.target.value.toUpperCase())}
-              onKeyDown={e => e.key === 'Enter' && addComparison()}
-              placeholder="ADD..."
-              className="retro-sunken bg-retro-bg text-retro-green px-1.5 py-0.5 text-xs w-16 outline-none uppercase"
-            />
-            <button
-              type="button"
-              onClick={addComparison}
-              disabled={!compareInput.trim() || comparisonData.length >= 4}
-              className="retro-raised bg-retro-panel text-retro-green px-1 py-0.5 text-xs hover:bg-retro-blue disabled:opacity-40"
-            >
-              +
-            </button>
-          </div>
-        )}
-
-        {/* Quote info */}
-        {quoteData && (
-          <div className="ml-auto flex items-center gap-2 text-sm">
-            <span className="text-retro-text-bright">{quoteData.name}</span>
-            <span className="text-retro-text-bright">
-              ${quoteData.price.toFixed(2)}
-            </span>
-            <span className={quoteData.change >= 0 ? 'text-retro-green' : 'text-retro-red'}>
-              {quoteData.change >= 0 ? '+' : ''}{quoteData.change.toFixed(2)} ({quoteData.changePercent >= 0 ? '+' : ''}{quoteData.changePercent.toFixed(2)}%)
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Comparison legend */}
-      {comparisonData.length > 0 && (
-        <div className="bg-retro-surface px-4 py-1 flex items-center gap-3 text-xs shrink-0 border-t border-retro-border-dark">
-          <span className="text-retro-border-light">Comparing:</span>
-          <span className="flex items-center gap-1">
-            <span className="w-3 h-0.5 inline-block" style={{ backgroundColor: '#39ff14' }} />
-            <span className="text-retro-green">{activeTicker}</span>
-          </span>
-          {comparisonData.map(c => (
-            <span key={c.symbol} className="flex items-center gap-1">
-              <span className="w-3 h-0.5 inline-block" style={{ backgroundColor: c.color }} />
-              <span style={{ color: c.color }}>{c.symbol}</span>
-              <button
-                type="button"
-                onClick={() => removeComparison(c.symbol)}
-                className="text-retro-border-light hover:text-retro-red"
-              >
-                x
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Main content */}
-      <div className="flex-1 flex min-h-0">
-        {/* Watchlist (left) */}
-        <Watchlist
-          onSelectTicker={handleWatchlistSelect}
-          activeTicker={activeTicker}
-          collapsed={watchlistCollapsed}
-          onToggleCollapse={() => setWatchlistCollapsed(prev => !prev)}
-        />
-
-        {/* Center column: Chart + Bottom tabs */}
-        <div className="flex-1 flex flex-col min-h-0">
-          {/* Chart area */}
-          <div className="shrink-0 retro-sunken bg-retro-bg relative" style={{ height: '45%' }}>
-            {chartLoading && (
-              <div className="absolute inset-0 flex items-center justify-center z-10">
-                <span className="text-retro-cyan retro-blink text-lg">Loading chart data...</span>
-              </div>
-            )}
-            {chartError && (
-              <div className="absolute inset-0 flex items-center justify-center z-10">
-                <span className="text-retro-red">[ERROR] {chartError}</span>
-              </div>
-            )}
-            {!chartLoading && !chartError && chartData.length === 0 && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-retro-border-light">Enter a ticker symbol and click [LOAD] to view stock data</span>
-              </div>
-            )}
-            {chartData.length > 0 && !chartLoading && (
-              <StockChart
-                data={chartData}
-                period={period}
-                indicators={comparisonData.length === 0 ? indicators : undefined}
-                comparisonData={comparisonData.length > 0 ? comparisonData : undefined}
-              />
-            )}
-          </div>
-
-          {/* Bottom section with tabs */}
-          <div className="flex-1 flex flex-col min-h-0">
-            {/* Tab bar */}
-            <div className="bg-retro-surface retro-raised px-4 py-1 flex items-center gap-1 shrink-0">
-              {([
-                { key: 'chat' as const, label: 'CHAT' },
-                { key: 'financials' as const, label: 'FINANCIALS' },
-                { key: 'news' as const, label: 'NEWS' },
-              ]).map(tab => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setBottomTab(tab.key)}
-                  className={`px-2 py-0.5 text-xs ${
-                    bottomTab === tab.key
-                      ? 'retro-sunken bg-retro-panel text-retro-green'
-                      : 'retro-raised bg-retro-surface text-retro-text hover:text-retro-text-bright'
-                  }`}
-                >
-                  [{tab.label}]
-                </button>
-              ))}
-              {bottomTab === 'chat' && (
-                <>
-                  <span className="text-retro-text text-xs ml-3">Model:</span>
-                  <select
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    className="retro-sunken bg-retro-bg text-retro-green px-2 py-0.5 text-xs outline-none"
+             <div className="flex items-center gap-1 bg-[#171717]/50 rounded-xl p-1 border border-[#333]">
+                {PERIODS.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => handlePeriodChange(p)}
+                    disabled={!activeTicker}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                      period === p 
+                        ? 'bg-[#2f2f2f] text-white shadow-sm' 
+                        : 'text-muted-foreground hover:text-white'
+                    }`}
                   >
-                    {AVAILABLE_MODELS.map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                  {activeTicker && (
-                    <span className="text-retro-cyan text-xs ml-auto">
-                      Analyzing: {activeTicker}
-                    </span>
-                  )}
-                </>
-              )}
+                    {PERIOD_LABELS[p]}
+                  </button>
+                ))}
+             </div>
+          </div>
+
+          {quoteData && (
+            <div className="flex items-center gap-4 pl-4 border-l border-[#333]">
+               <div className="text-right">
+                  <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-none mb-1">{quoteData.symbol}</div>
+                  <div className="text-xl font-bold leading-none tracking-tight">${quoteData.price.toFixed(2)}</div>
+               </div>
+               <div className={`flex flex-col items-end px-3 py-1.5 rounded-xl border ${
+                  quoteData.change >= 0 
+                    ? 'bg-green-500/10 border-green-500/20 text-green-400' 
+                    : 'bg-red-500/10 border-red-500/20 text-red-400'
+               }`}>
+                  <span className="text-xs font-bold leading-none">
+                     {quoteData.change >= 0 ? '+' : ''}{quoteData.change.toFixed(2)}
+                  </span>
+                  <span className="text-[10px] font-medium opacity-80 leading-none mt-1">
+                     {quoteData.changePercent >= 0 ? '+' : ''}{quoteData.changePercent.toFixed(2)}%
+                  </span>
+               </div>
             </div>
+          )}
+        </header>
 
-            {/* Tab content */}
-            {bottomTab === 'chat' && (
-              <div className="flex-1 flex flex-col min-h-0">
-                <main className="flex-1 overflow-auto p-4 space-y-3">
-                  {messages.length === 0 && (
-                    <div className="flex items-center justify-center h-full">
-                      <span className="text-retro-border-light text-sm">
-                        {activeTicker
-                          ? `Ask anything about ${activeTicker}...`
-                          : 'Load a stock ticker to start chatting'}
-                      </span>
-                    </div>
-                  )}
-                  {messages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className={`retro-raised max-w-[85%] p-3 text-sm ${
-                          msg.role === 'user'
-                            ? 'bg-retro-user-bg text-retro-cyan'
-                            : 'bg-retro-assistant-bg text-retro-text'
-                        }`}
-                      >
-                        <div className="text-xs text-retro-border-light mb-1">
-                          {msg.role === 'user' ? '> You' : `< ${model}`}
-                        </div>
-                        <div className="whitespace-pre-wrap break-words">
-                          {renderMessageContent(msg.content)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {isResponding && messages[messages.length - 1]?.role !== 'assistant' && (
-                    <div className="flex justify-start">
-                      <div className="retro-raised bg-retro-assistant-bg p-3 text-sm">
-                        <span className="text-retro-cyan retro-blink">Searching & analyzing...</span>
-                      </div>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </main>
-                <div className="bg-retro-surface retro-raised px-4 py-2 shrink-0">
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      handleSendMessage();
-                    }}
-                    className="flex gap-2"
-                  >
-                    <span className="text-retro-green py-1">&gt;</span>
-                    <input
-                      ref={chatInputRef}
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder={`Ask about ${activeTicker || 'a stock'}...`}
-                      disabled={isResponding}
-                      className="flex-1 retro-sunken bg-retro-bg text-retro-green px-3 py-1 text-sm outline-none disabled:opacity-50"
-                    />
-                    <button
-                      type="submit"
-                      disabled={isResponding || !chatInput.trim()}
-                      className="retro-raised bg-retro-panel text-retro-green px-3 py-1 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-                    >
-                      {isResponding ? '[...]' : '[SEND]'}
-                    </button>
-                  </form>
+        {shareBanner && (
+          <div className={`px-6 py-2 border-b border-[#333] text-xs ${
+            shareStatus === 'error'
+              ? 'bg-red-500/10 text-red-400'
+              : 'bg-blue-500/10 text-blue-300'
+          }`}>
+            {shareBanner}
+          </div>
+        )}
+
+        {/* Comparison Legend Bar */}
+        {comparisonData.length > 0 && (
+          <div className="px-6 py-2 bg-[#171717] border-b border-[#333] flex items-center gap-4 text-[10px] font-bold uppercase tracking-wider">
+             <span className="text-muted-foreground">Comparing with:</span>
+             {comparisonData.map(c => (
+               <div key={c.symbol} className="flex items-center gap-2 px-2 py-1 bg-[#1a1a1a] border border-[#333] rounded-lg">
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color }} />
+                  <span style={{ color: c.color }}>{c.symbol}</span>
+                  <button onClick={() => removeComparison(c.symbol)} className="text-muted-foreground hover:text-white transition-colors">
+                     <X size={10} />
+                  </button>
+               </div>
+             ))}
+             <div className="flex-1" />
+             <div className="flex items-center gap-2">
+                <input 
+                  type="text" 
+                  value={compareInput}
+                  onChange={e => setCompareInput(e.target.value.toUpperCase())}
+                  onKeyDown={e => e.key === 'Enter' && addComparison()}
+                  placeholder="ADD TICKER..."
+                  className="bg-transparent border-b border-[#444] text-[10px] w-20 outline-none focus:border-white transition-colors p-0.5"
+                />
+             </div>
+          </div>
+        )}
+
+        {/* Main Split Layout */}
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Top area: Chart */}
+          <div className="h-[45%] border-b border-[#333] relative bg-black/20">
+             {!chartLoading && !chartError && chartData.length === 0 && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground gap-4">
+                   <div className="w-16 h-16 rounded-full bg-[#171717] border border-[#333] flex items-center justify-center">
+                      <TrendingUp size={32} className="opacity-20" />
+                   </div>
+                   <p className="text-sm font-medium">Select a ticker to visualize market data</p>
                 </div>
-              </div>
-            )}
-
-            {bottomTab === 'financials' && (
-              <div className="flex-1 min-h-0">
-                <FinancialStatements ticker={activeTicker} />
-              </div>
-            )}
-
-            {bottomTab === 'news' && (
-              <div className="flex-1 overflow-y-auto">
-                {news.length > 0 ? (
-                  <div className="px-4 py-3 space-y-2">
-                    {news.map((item, i) => (
-                      <div key={i} className="flex items-start gap-2 text-sm">
-                        <span className="text-retro-green shrink-0">&bull;</span>
-                        <div className="min-w-0">
-                          <a
-                            href={item.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-retro-cyan hover:text-retro-text-bright no-underline hover:underline"
-                          >
-                            {item.title}
-                          </a>
-                          <div className="text-retro-border-light text-xs mt-0.5">
-                            {item.publisher}{item.publishTime ? ` - ${timeAgo(item.publishTime)}` : ''}
-                          </div>
-                        </div>
+             )}
+             {chartLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-[#0a0a0a]/50 backdrop-blur-[2px] z-20">
+                   <div className="flex flex-col items-center gap-3">
+                      <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                      <span className="text-xs font-bold uppercase tracking-[0.2em] animate-pulse">Fetching Market Data...</span>
+                   </div>
+                </div>
+             )}
+             {chartError && (
+                <div className="absolute inset-0 flex items-center justify-center p-8">
+                   <div className="max-w-md bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl flex items-center gap-4">
+                      <AlertCircle size={24} />
+                      <div>
+                         <p className="text-sm font-bold">Failed to load chart</p>
+                         <p className="text-xs opacity-80">{chartError}</p>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <span className="text-retro-border-light text-sm">
-                      {activeTicker ? 'No news available' : 'Load a ticker to view news'}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right sidebar with tabs */}
-        <div className="w-64 shrink-0 flex flex-col bg-retro-surface retro-raised">
-          {/* Right tab bar */}
-          <div className="flex shrink-0 border-b border-retro-border-light">
-            {([
-              { key: 'metrics' as const, label: 'METRICS' },
-              { key: 'earnings' as const, label: 'EARNINGS' },
-              { key: 'analyst' as const, label: 'ANALYST' },
-            ]).map(tab => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setRightTab(tab.key)}
-                className={`flex-1 px-1 py-1.5 text-[10px] ${
-                  rightTab === tab.key
-                    ? 'bg-retro-panel text-retro-green border-b-2 border-retro-green'
-                    : 'bg-retro-surface text-retro-text hover:text-retro-text-bright'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+                   </div>
+                </div>
+             )}
+             {chartData.length > 0 && !chartLoading && (
+               <StockChart
+                 data={chartData}
+                 period={period}
+                 indicators={comparisonData.length === 0 ? indicators : undefined}
+                 comparisonData={comparisonData.length > 0 ? comparisonData : undefined}
+               />
+             )}
           </div>
 
-          {/* Right tab content */}
-          <div className="flex-1 overflow-y-auto min-h-0">
-            {rightTab === 'metrics' && (
-              <>
-                {metrics ? (
-                  <div className="px-3 py-2 space-y-0.5">
-                    <MetricRow label="Mkt Cap" value={formatLargeNumber(metrics.marketCap)} />
-                    <MetricRow label="P/E" value={metrics.peRatio != null ? metrics.peRatio.toFixed(2) : 'N/A'} />
-                    <MetricRow label="Fwd P/E" value={metrics.forwardPE != null ? metrics.forwardPE.toFixed(2) : 'N/A'} />
-                    <MetricRow label="Beta" value={metrics.beta != null ? metrics.beta.toFixed(2) : 'N/A'} />
-                    <MetricRow
-                      label="Div Yield"
-                      value={metrics.dividendYield != null ? `${(metrics.dividendYield * 100).toFixed(2)}%` : 'N/A'}
-                    />
-                    <div className="border-t border-retro-border-light my-1" />
-                    <MetricRow
-                      label="52W High"
-                      value={metrics.fiftyTwoWeekHigh != null ? `$${metrics.fiftyTwoWeekHigh.toFixed(2)}` : 'N/A'}
-                    />
-                    <MetricRow
-                      label="52W Low"
-                      value={metrics.fiftyTwoWeekLow != null ? `$${metrics.fiftyTwoWeekLow.toFixed(2)}` : 'N/A'}
-                    />
-                    <MetricRow label="Avg Vol" value={formatVolume(metrics.avgVolume)} />
-                    <div className="border-t border-retro-border-light my-1" />
-                    <MetricRow
-                      label="Target"
-                      value={metrics.targetPrice != null ? `$${metrics.targetPrice.toFixed(2)}` : 'N/A'}
-                    />
-                    <MetricRow
-                      label="Rating"
-                      value={metrics.analystRating ? metrics.analystRating.charAt(0).toUpperCase() + metrics.analystRating.slice(1) : 'N/A'}
-                    />
-                  </div>
-                ) : (
-                  <div className="px-3 py-4 text-center">
-                    <span className="text-retro-border-light text-xs">
-                      {activeTicker ? 'Loading metrics...' : 'Load a ticker to view metrics'}
-                    </span>
+          {/* Bottom area: Mixed Tabs (Chat, Financials, News) */}
+          <div className="flex-1 flex flex-col min-h-0">
+             <div className="h-12 border-b border-[#333] flex items-center px-6 gap-6 shrink-0 overflow-x-auto no-scrollbar">
+                {[
+                  { key: 'chat' as const, label: 'AI Analyst', icon: <MessageSquare size={14} /> },
+                  { key: 'financials' as const, label: 'Fundamentals', icon: <BarChart4 size={14} /> },
+                  { key: 'news' as const, label: 'Market News', icon: <Newspaper size={14} /> },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setBottomTab(tab.key)}
+                    className={`relative h-full flex items-center gap-2 text-xs font-bold uppercase tracking-widest transition-all ${
+                      bottomTab === tab.key ? 'text-white' : 'text-muted-foreground hover:text-white/60'
+                    }`}
+                  >
+                    {tab.icon}
+                    {tab.label}
+                    {bottomTab === tab.key && (
+                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-white rounded-full" />
+                    )}
+                  </button>
+                ))}
+                
+                <div className="flex-1" />
+                
+                {bottomTab === 'chat' && (
+                  <div className="flex items-center gap-3 animate-in fade-in slide-in-from-right-2 duration-300">
+                     <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Analysis Engine:</span>
+                     <select
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        className="bg-[#171717] border border-[#333] rounded-lg px-2 py-1 text-[10px] font-bold text-blue-400 uppercase tracking-wider focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer"
+                      >
+                        {AVAILABLE_MODELS.map((m) => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
                   </div>
                 )}
-              </>
-            )}
+             </div>
 
-            {rightTab === 'earnings' && (
-              <EarningsPanel ticker={activeTicker} />
-            )}
+             <div className="flex-1 flex min-h-0 bg-black/10">
+                {/* Content Side */}
+                <div className="flex-1 min-w-0 border-r border-[#333] flex flex-col">
+                   {bottomTab === 'chat' && (
+                     <div className="flex-1 flex flex-col min-h-0">
+                        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                           {messages.length === 0 && (
+                             <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-8 opacity-40">
+                                <div className="grid grid-cols-2 gap-4">
+                                   {[
+                                      "Analyze current trend",
+                                      "Key risk factors?",
+                                      "Earnings growth potential",
+                                      "Compare with competitors"
+                                   ].map((hint, idx) => (
+                                      <div key={idx} className="p-4 border border-[#333] rounded-xl text-xs text-center">
+                                         {hint}
+                                      </div>
+                                   ))}
+                                </div>
+                                <p className="text-xs uppercase font-bold tracking-[0.2em]">Ready for Analysis</p>
+                             </div>
+                           )}
+                           {messages.map((msg) => (
+                              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                 <div className={`flex flex-col gap-2 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                    <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+                                       msg.role === 'user' 
+                                         ? 'bg-[#212121] border border-[#333] text-white rounded-tr-none' 
+                                         : 'bg-transparent text-foreground rounded-tl-none font-medium'
+                                    }`}>
+                                       {renderMessageContent(msg.content)}
+                                    </div>
+                                    <span className="text-[10px] font-bold text-muted-foreground/30 uppercase tracking-widest px-1">
+                                       {msg.role === 'user' ? 'Strategy' : model}
+                                    </span>
+                                 </div>
+                              </div>
+                           ))}
+                           {isResponding && (
+                             <div className="flex justify-start">
+                                <div className="flex flex-col gap-2 items-start">
+                                   <div className="px-4 py-3 bg-transparent text-blue-400 rounded-2xl rounded-tl-none flex items-center gap-3">
+                                      <div className="flex gap-1">
+                                         <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                                         <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                                         <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" />
+                                      </div>
+                                      <span className="text-xs font-bold uppercase tracking-widest opacity-50">Synthesizing...</span>
+                                   </div>
+                                </div>
+                             </div>
+                           )}
+                           <div ref={messagesEndRef} />
+                        </div>
+                        
+                        <div className="p-6 pt-0">
+                           <div className="bg-[#1a1a1a] border border-[#333] rounded-2xl p-2 focus-within:ring-1 focus-within:ring-white/20 transition-all">
+                              <form 
+                                className="flex items-center gap-2"
+                                onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
+                              >
+                                 <input
+                                   ref={chatInputRef}
+                                   type="text"
+                                   value={chatInput}
+                                   onChange={(e) => setChatInput(e.target.value)}
+                                   placeholder={`Run analysis on ${activeTicker || 'markets'}...`}
+                                   disabled={isResponding}
+                                   className="flex-1 bg-transparent border-none outline-none px-4 py-2 text-sm font-medium placeholder:text-muted-foreground/40"
+                                 />
+                                 <button
+                                   type="submit"
+                                   disabled={isResponding || !chatInput.trim()}
+                                   className="w-10 h-10 rounded-xl bg-white text-black flex items-center justify-center hover:bg-neutral-200 transition-all disabled:opacity-20 shadow-lg"
+                                 >
+                                    <Send size={18} />
+                                 </button>
+                              </form>
+                           </div>
+                        </div>
+                     </div>
+                   )}
 
-            {rightTab === 'analyst' && (
-              <AnalystPanel ticker={activeTicker} />
-            )}
+                   {bottomTab === 'financials' && (
+                     <div className="flex-1 overflow-auto custom-scrollbar">
+                        <FinancialStatements ticker={activeTicker} />
+                     </div>
+                   )}
+
+                   {bottomTab === 'news' && (
+                     <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                        {news.length > 0 ? (
+                           <div className="space-y-4">
+                              {news.map((item, i) => (
+                                <a
+                                  key={i}
+                                  href={item.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="group block p-4 bg-[#171717] border border-[#333] rounded-2xl hover:bg-[#1a1a1a] transition-all hover:border-[#444]"
+                                >
+                                  <div className="flex justify-between items-start mb-2">
+                                     <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">{item.publisher}</span>
+                                     <span className="text-[10px] font-medium text-muted-foreground">{timeAgo(item.publishTime)}</span>
+                                  </div>
+                                  <h3 className="text-sm font-semibold group-hover:text-blue-400 transition-colors leading-snug">{item.title}</h3>
+                                </a>
+                              ))}
+                           </div>
+                        ) : (
+                           <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-4 opacity-30">
+                              <Newspaper size={48} />
+                              <p className="text-xs font-bold uppercase tracking-widest">No recent alerts</p>
+                           </div>
+                        )}
+                     </div>
+                   )}
+                </div>
+
+                {/* Right Tab Sidebar */}
+                <div className="w-[300px] shrink-0 flex flex-col bg-black/5">
+                   <div className="p-4 border-b border-[#333]">
+                      <div className="flex p-1 bg-[#171717] rounded-xl border border-[#333]">
+                         {[
+                           { key: 'metrics' as const, label: 'Stats' },
+                           { key: 'earnings' as const, label: 'Earnings' },
+                           { key: 'analyst' as const, label: 'Ratings' },
+                         ].map(tab => (
+                            <button
+                               key={tab.key}
+                               onClick={() => setRightTab(tab.key)}
+                               className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
+                                  rightTab === tab.key ? 'bg-[#2f2f2f] text-white' : 'text-muted-foreground hover:text-white/60'
+                               }`}
+                            >
+                               {tab.label}
+                            </button>
+                         ))}
+                      </div>
+                   </div>
+
+                   <div className="flex-1 overflow-y-auto custom-scrollbar">
+                      {rightTab === 'metrics' && (
+                         <div className="p-6 space-y-6">
+                            {metrics ? (
+                               <>
+                                  <div className="space-y-4">
+                                     <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em] mb-4">Core Valuation</h4>
+                                     <MetricItem label="Mkt Cap" value={formatLargeNumber(metrics.marketCap)} icon={<Briefcase size={12}/>} />
+                                     <MetricItem label="P/E Ratio" value={metrics.peRatio?.toFixed(2) || 'N/A'} icon={<BarChart3 size={12}/>} />
+                                     <MetricItem label="Fwd P/E" value={metrics.forwardPE?.toFixed(2) || 'N/A'} icon={<Clock size={12}/>} />
+                                     <MetricItem label="Dividend" value={metrics.dividendYield != null ? `${(metrics.dividendYield * 100).toFixed(2)}%` : 'None'} icon={<DollarSign size={12}/>} />
+                                  </div>
+                                  
+                                  <div className="h-[1px] bg-[#333]" />
+                                  
+                                  <div className="space-y-4">
+                                     <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em] mb-4">Market Ranges</h4>
+                                     <div className="space-y-2">
+                                        <div className="flex justify-between text-[10px] font-bold uppercase text-muted-foreground/50">
+                                           <span>52W Low</span>
+                                           <span>52W High</span>
+                                        </div>
+                                        <div className="h-1.5 bg-[#171717] rounded-full relative overflow-hidden flex items-center border border-[#333]">
+                                           {metrics.fiftyTwoWeekLow && metrics.fiftyTwoWeekHigh && quoteData && (
+                                              <div 
+                                                className="absolute h-full bg-blue-500/50"
+                                                style={{
+                                                   left: '20%', // simplified for logic
+                                                   width: '60%'
+                                                }}
+                                              />
+                                           )}
+                                        </div>
+                                        <div className="flex justify-between text-xs font-bold">
+                                           <span>${metrics.fiftyTwoWeekLow?.toFixed(2)}</span>
+                                           <span>${metrics.fiftyTwoWeekHigh?.toFixed(2)}</span>
+                                        </div>
+                                     </div>
+                                  </div>
+                                  
+                                  <div className="space-y-4 pt-2">
+                                     <MetricItem label="Avg Volume" value={formatVolume(metrics.avgVolume)} />
+                                     <MetricItem label="Beta" value={metrics.beta?.toFixed(2) || 'N/A'} />
+                                  </div>
+
+                                  <div className="mt-8 p-6 bg-blue-500/5 border border-blue-500/20 rounded-2xl flex flex-col items-center gap-2">
+                                     <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">Analyst Verdict</span>
+                                     <span className="text-xl font-bold uppercase tracking-tighter">{metrics.analystRating || 'Neutral'}</span>
+                                     <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                                        Target: <span className="text-white">${metrics.targetPrice?.toFixed(2)}</span>
+                                     </div>
+                                  </div>
+                               </>
+                            ) : (
+                               <div className="h-64 flex flex-col items-center justify-center opacity-20 gap-4">
+                                  <BarChart3 size={48} />
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.2em]">Data Pending</p>
+                               </div>
+                            )}
+                         </div>
+                      )}
+
+                      {rightTab === 'earnings' && <div className="p-4"><EarningsPanel ticker={activeTicker} /></div>}
+                      {rightTab === 'analyst' && <div className="p-4"><AnalystPanel ticker={activeTicker} /></div>}
+                   </div>
+                </div>
+             </div>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+export default function FinancePage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center bg-[#0a0a0a] text-foreground">Loading finance workspace...</div>}>
+      <FinancePageContent />
+    </Suspense>
+  );
+}
+
+function MetricItem({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
+   return (
+      <div className="flex items-center justify-between group">
+         <div className="flex items-center gap-2 text-muted-foreground group-hover:text-foreground transition-colors">
+            {icon && <span className="opacity-40">{icon}</span>}
+            <span className="text-xs font-semibold">{label}</span>
+         </div>
+         <span className="text-sm font-bold tracking-tight">{value}</span>
+      </div>
+   );
 }

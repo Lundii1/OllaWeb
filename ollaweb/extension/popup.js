@@ -77,7 +77,7 @@ async function handleTailor() {
       throw new Error('No job posting text found. Try selecting the description and retry.');
     }
 
-    setStatus('Sending to OllaWeb...');
+    setStatus('Sending to Voltaire...');
 
     const payload = {
       jobPosting: text,
@@ -92,7 +92,7 @@ async function handleTailor() {
     });
 
     if (!response.ok) {
-      let message = 'Failed to send job posting to OllaWeb.';
+      let message = 'Failed to send job posting to Voltaire.';
       try {
         const err = await response.json();
         if (err && err.error) message = err.error;
@@ -100,7 +100,7 @@ async function handleTailor() {
       throw new Error(message);
     }
 
-    setStatus('Opening OllaWeb...');
+    setStatus('Opening Voltaire...');
     await chrome.tabs.create({ url: OPEN_URL });
     setStatus('Done.');
   } catch (err) {

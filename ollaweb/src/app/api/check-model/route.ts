@@ -1,17 +1,4 @@
-
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execAsync = promisify(exec);
-
-async function checkModelInstalled(modelName: string): Promise<boolean> {
-  try {
-    const { stdout } = await execAsync('ollama list');
-    return stdout.includes(modelName + ':latest');
-  } catch {
-    return false;
-  }
-}
+import { checkModelInstalled } from '../../../lib/ollama-utils';
 
 export async function GET(req: Request) {
   const url = new URL(req.url);

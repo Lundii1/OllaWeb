@@ -1,6 +1,14 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import { 
+  Calendar, 
+  History, 
+  BarChart3, 
+  ArrowUpRight, 
+  ArrowDownRight,
+  Target
+} from 'lucide-react';
 import type { EarningsData } from '../../lib/types';
 
 interface EarningsPanelProps {
@@ -37,74 +45,88 @@ export function EarningsPanel({ ticker }: EarningsPanelProps) {
 
   if (!ticker) {
     return (
-      <div className="px-3 py-4 text-center text-retro-border-light text-xs">
-        Load a ticker to view earnings
+      <div className="h-full flex flex-col items-center justify-center p-8 text-center opacity-30 gap-4">
+         <Calendar size={32} />
+         <p className="text-[10px] font-bold uppercase tracking-[0.2em]">Select ticker to view earnings</p>
       </div>
     );
   }
 
   if (loading) {
     return (
-      <div className="px-3 py-4 text-center">
-        <span className="text-retro-cyan retro-blink text-xs">Loading earnings...</span>
+      <div className="h-48 flex flex-col items-center justify-center gap-3">
+        <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+        <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Loading Earnings...</span>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="px-3 py-4 text-center text-retro-red text-xs">[ERROR] {error}</div>
+      <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs font-medium">
+        Error: {error}
+      </div>
     );
   }
 
   if (!data) return null;
 
   return (
-    <div className="overflow-y-auto text-xs">
+    <div className="flex flex-col gap-6 py-2 pb-6">
       {/* Next Earnings */}
       {data.nextEarningsDate && (
-        <div className="px-3 py-2 border-b border-retro-border-light">
-          <div className="text-retro-amber mb-1">Next Earnings</div>
-          <div className="flex justify-between items-center">
-            <span className="text-retro-text-bright">{data.nextEarningsDate}</span>
-            <span className="text-retro-cyan">
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 transition-all hover:bg-white/[0.07]">
+          <div className="flex items-center gap-2 text-muted-foreground mb-3">
+             <Calendar size={14} />
+             <span className="text-[10px] font-bold uppercase tracking-widest">Upcoming Release</span>
+          </div>
+          <div className="flex justify-between items-end">
+            <div className="text-xl font-bold tracking-tight">{data.nextEarningsDate}</div>
+            <div className={`px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider ${
+               daysUntil(data.nextEarningsDate) > 0 ? 'bg-blue-500/10 text-blue-400' : 'bg-green-500/10 text-green-400'
+            }`}>
               {daysUntil(data.nextEarningsDate) > 0
-                ? `in ${daysUntil(data.nextEarningsDate)}d`
+                ? `In ${daysUntil(data.nextEarningsDate)} Days`
                 : 'Today'}
-            </span>
+            </div>
           </div>
         </div>
       )}
 
       {/* EPS History */}
       {data.history.length > 0 && (
-        <div className="px-3 py-2 border-b border-retro-border-light">
-          <div className="text-retro-amber mb-1.5">EPS History</div>
-          <div className="space-y-1">
-            <div className="flex text-retro-border-light">
-              <span className="w-16">Period</span>
-              <span className="w-14 text-right">Est</span>
-              <span className="w-14 text-right">Act</span>
-              <span className="flex-1 text-right">Surprise</span>
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-muted-foreground px-1">
+             <History size={14} />
+             <span className="text-[10px] font-bold uppercase tracking-widest">EPS History</span>
+          </div>
+          <div className="space-y-2">
+            <div className="flex px-3 text-[10px] font-bold uppercase text-muted-foreground/50 tracking-wider">
+               <span className="w-16">Period</span>
+               <span className="w-14 text-right">Est</span>
+               <span className="w-14 text-right">Act</span>
+               <span className="flex-1 text-right">Surprise</span>
             </div>
             {data.history.map((h, i) => (
-              <div key={i} className="flex items-center">
-                <span className="w-16 text-retro-text">{h.date || h.quarter}</span>
-                <span className="w-14 text-right text-retro-text-bright font-mono">
+              <div key={i} className="flex items-center px-3 py-2 bg-white/[0.02] border border-white/5 rounded-xl hover:bg-white/5 transition-colors">
+                <span className="w-16 text-xs font-bold">{h.date || h.quarter}</span>
+                <span className="w-14 text-right text-xs font-mono text-muted-foreground">
                   {h.epsEstimate != null ? h.epsEstimate.toFixed(2) : '—'}
                 </span>
-                <span className="w-14 text-right text-retro-text-bright font-mono">
+                <span className="w-14 text-right text-xs font-mono font-bold">
                   {h.epsActual != null ? h.epsActual.toFixed(2) : '—'}
                 </span>
-                <span className={`flex-1 text-right font-mono ${
-                  h.surprisePercent != null
-                    ? h.surprisePercent >= 0 ? 'text-retro-green' : 'text-retro-red'
-                    : 'text-retro-border-light'
-                }`}>
-                  {h.surprisePercent != null
-                    ? `${h.surprisePercent >= 0 ? '+' : ''}${h.surprisePercent.toFixed(1)}%`
-                    : '—'}
-                </span>
+                <div className={`flex-1 text-right flex justify-end`}>
+                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-mono min-w-[50px] text-center ${
+                      h.surprisePercent != null
+                        ? h.surprisePercent >= 0 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
+                        : 'text-muted-foreground'
+                   }`}>
+                      {h.surprisePercent != null
+                        ? `${h.surprisePercent >= 0 ? '+' : ''}${h.surprisePercent.toFixed(1)}%`
+                        : '—'}
+                   </span>
+                </div>
               </div>
             ))}
           </div>
@@ -113,27 +135,33 @@ export function EarningsPanel({ ticker }: EarningsPanelProps) {
 
       {/* Forward Estimates */}
       {data.trend.length > 0 && (
-        <div className="px-3 py-2 border-b border-retro-border-light">
-          <div className="text-retro-amber mb-1.5">Forward Estimates</div>
-          <div className="space-y-1">
-            <div className="flex text-retro-border-light">
-              <span className="w-16">Period</span>
-              <span className="w-14 text-right">EPS</span>
-              <span className="flex-1 text-right">Growth</span>
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-muted-foreground px-1">
+             <BarChart3 size={14} />
+             <span className="text-[10px] font-bold uppercase tracking-widest">Forward Estimates</span>
+          </div>
+          <div className="space-y-2">
+            <div className="flex px-3 text-[10px] font-bold uppercase text-muted-foreground/50 tracking-wider">
+               <span className="w-16">Period</span>
+               <span className="w-14 text-right">EPS Est</span>
+               <span className="flex-1 text-right">Y/Y Growth</span>
             </div>
             {data.trend.map((t, i) => (
-              <div key={i} className="flex items-center">
-                <span className="w-16 text-retro-text">{t.period}</span>
-                <span className="w-14 text-right text-retro-text-bright font-mono">
+              <div key={i} className="flex items-center px-3 py-2 bg-white/[0.02] border border-white/5 rounded-xl">
+                <span className="w-16 text-xs font-bold">{t.period}</span>
+                <span className="w-14 text-right text-xs font-mono font-bold">
                   {t.epsEstimate != null ? t.epsEstimate.toFixed(2) : '—'}
                 </span>
-                <span className={`flex-1 text-right font-mono ${
-                  t.growth != null
-                    ? t.growth >= 0 ? 'text-retro-green' : 'text-retro-red'
-                    : 'text-retro-border-light'
-                }`}>
-                  {t.growth != null ? `${t.growth >= 0 ? '+' : ''}${t.growth.toFixed(1)}%` : '—'}
-                </span>
+                <div className="flex-1 text-right flex justify-end items-center gap-1.5 font-mono text-xs">
+                   {t.growth != null && (
+                      t.growth >= 0 
+                        ? <ArrowUpRight size={10} className="text-green-400" />
+                        : <ArrowDownRight size={10} className="text-red-400" />
+                   )}
+                   <span className={t.growth != null ? (t.growth >= 0 ? 'text-green-400' : 'text-red-400') : 'text-muted-foreground'}>
+                      {t.growth != null ? `${t.growth >= 0 ? '+' : ''}${t.growth.toFixed(1)}%` : '—'}
+                   </span>
+                </div>
               </div>
             ))}
           </div>
@@ -142,23 +170,25 @@ export function EarningsPanel({ ticker }: EarningsPanelProps) {
 
       {/* EPS Revisions */}
       {data.epsRevisions.length > 0 && (
-        <div className="px-3 py-2">
-          <div className="text-retro-amber mb-1.5">EPS Revisions (30d)</div>
-          <div className="space-y-1">
-            <div className="flex text-retro-border-light">
-              <span className="w-16">Period</span>
-              <span className="w-10 text-right">Up</span>
-              <span className="w-10 text-right">Down</span>
-            </div>
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-muted-foreground px-1">
+             <Target size={14} />
+             <span className="text-[10px] font-bold uppercase tracking-widest">EPS Revisions (30d)</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
             {data.epsRevisions.map((r, i) => (
-              <div key={i} className="flex items-center">
-                <span className="w-16 text-retro-text">{r.period}</span>
-                <span className="w-10 text-right text-retro-green font-mono">
-                  {r.upLast30 ?? '—'}
-                </span>
-                <span className="w-10 text-right text-retro-red font-mono">
-                  {r.downLast30 ?? '—'}
-                </span>
+              <div key={i} className="p-3 bg-[#111] border border-white/5 rounded-2xl">
+                <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">{r.period}</div>
+                <div className="flex items-center justify-between">
+                   <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                      <span className="text-xs font-bold text-green-400">{r.upLast30 ?? 0}</span>
+                   </div>
+                   <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-red-500">{r.downLast30 ?? 0}</span>
+                      <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                   </div>
+                </div>
               </div>
             ))}
           </div>

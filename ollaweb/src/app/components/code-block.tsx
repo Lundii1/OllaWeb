@@ -23,10 +23,15 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   }, [code, language])
 
   return (
-    <pre className="retro-sunken bg-[#0a0a1a] p-4 overflow-x-auto text-retro-green">
-      <code ref={codeRef} className={`language-${language}`}>
-        {code}
-      </code>
-    </pre>
+    <div className="relative group my-4 overflow-hidden rounded-xl border border-[#333] shadow-lg">
+      <div className="flex items-center justify-between px-4 py-2 bg-[#2a2a2a] border-b border-[#333]">
+        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{language}</span>
+      </div>
+      <pre className="m-0 p-4 bg-[#1a1a1a] overflow-x-auto custom-scrollbar">
+        <code ref={codeRef} className={`language-${language} text-sm leading-relaxed`}>
+          {code}
+        </code>
+      </pre>
+    </div>
   )
 }

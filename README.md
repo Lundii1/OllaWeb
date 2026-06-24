@@ -1,6 +1,6 @@
-# OllaWeb
+# Voltaire
 
-**OllaWeb** is an open‑source **front‑end interface** for locally hosted AI chat models using **Ollama**.  
+**Voltaire** is an open‑source **front‑end interface** for locally hosted AI chat models using **Ollama**.  
 It allows you to run ChatGPT-like conversations fully on your machine — with image input, reasoning display, formatted code responses, and an accessible, modern UI.
 
 ---
@@ -34,7 +34,7 @@ OllaWeb focuses on **transparency, usability, and control**, giving users a priv
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com/Lundii1/OllaWeb.git
-cd OllaWeb
+cd Voltaire
 ```
 
 ### 2. Set Up Ollama Locally

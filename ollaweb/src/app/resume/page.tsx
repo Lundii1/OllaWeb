@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { Suspense, useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { LaTeXEditor } from '../components/latex-editor';
@@ -8,12 +8,14 @@ import { PDFPreview } from '../components/pdf-preview';
 import { JobInput } from '../components/job-input';
 import { DiffViewer } from '../components/diff-viewer';
 import { ResumeHistory } from '../components/resume-history';
+import { AppNav } from '../components/app-nav';
 import type { UserProfile, ResumeVersion } from '../../lib/resume-types';
 import { listVersions, saveVersion, deleteVersion, generateVersionTitle } from '../../lib/resume-storage';
+import { AlertCircle } from 'lucide-react';
 
-const REQUIRED_MODELS = ['gpt-oss:20b'];
+const REQUIRED_MODELS = ['gemma4:e4b'];
 
-export default function ResumePage() {
+function ResumePageContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchParams = useSearchParams();
   const autoTailorEnabled = searchParams?.get('autoTailor') === '1';
@@ -27,7 +29,7 @@ export default function ResumePage() {
 
   // Editor state
   const [latex, setLatex] = useState('');
-  const model = 'gpt-oss:20b';
+  const model = 'gemma4:e4b';
   const [saved, setSaved] = useState(false);
 
   // Job tailoring
@@ -244,11 +246,10 @@ export default function ResumePage() {
 
     setIsExtracting(true);
     setExtractStatus('Extracting text from PDF...');
-    setLatex('');
 
     const formData = new FormData();
     formData.append('pdf', file);
-    formData.append('model', 'gpt-oss:20b');
+    formData.append('model', 'gemma4:e4b');
 
     try {
       const response = await fetch('/api/resume/extract', {
@@ -259,18 +260,22 @@ export default function ResumePage() {
       if (!response.ok) {
         const err = await response.json();
         setExtractStatus(`Error: ${err.error}`);
-        setIsExtracting(false);
         return;
       }
 
       setExtractStatus('Converting to LaTeX...');
 
       const reader = response.body?.getReader();
-      if (!reader) return;
+      if (!reader) {
+        setExtractStatus('Error: Failed to read extraction response stream');
+        return;
+      }
 
       const decoder = new TextDecoder();
       let buffer = '';
       let fullLatex = '';
+      let streamError = '';
+      let streamDone = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -286,13 +291,12 @@ export default function ResumePage() {
             const data = JSON.parse(line.slice(6));
             if (data.text) {
               fullLatex += data.text;
-              setLatex(fullLatex);
             }
             if (data.error) {
-              setExtractStatus(`Error: ${data.error}${data.action ? ` â€” ${data.action}` : ''}`);
+              streamError = data.error + (data.action ? ` - ${data.action}` : '');
             }
             if (data.done) {
-              setExtractStatus('');
+              streamDone = true;
             }
           } catch { }
         }
@@ -303,19 +307,28 @@ export default function ResumePage() {
           const data = JSON.parse(buffer.trim().slice(6));
           if (data.text) {
             fullLatex += data.text;
-            setLatex(fullLatex);
           }
           if (data.error) {
-            setExtractStatus(`Error: ${data.error}${data.action ? ` â€” ${data.action}` : ''}`);
+            streamError = data.error + (data.action ? ` - ${data.action}` : '');
           }
           if (data.done) {
-            setExtractStatus('');
+            streamDone = true;
           }
         } catch { }
       }
+
+      if (streamError) {
+        setExtractStatus(`Error: ${streamError}`);
+        return;
+      }
+
       // Auto-compile after extraction
       if (fullLatex.trim()) {
+        setLatex(fullLatex);
+        setExtractStatus('');
         await compileLatex(fullLatex);
+      } else {
+        setExtractStatus(streamDone ? 'Error: No LaTeX content was returned' : 'Error: Extraction stream ended unexpectedly');
       }
     } catch (err) {
       setExtractStatus(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -375,7 +388,6 @@ export default function ResumePage() {
             const data = JSON.parse(line.slice(6));
             if (data.text) {
               newLatex += data.text;
-              setLatex(newLatex);
             }
             if (data.error) {
               streamError = data.error + (data.action ? ` — ${data.action}` : '');
@@ -390,7 +402,6 @@ export default function ResumePage() {
           const data = JSON.parse(buffer.trim().slice(6));
           if (data.text) {
             newLatex += data.text;
-            setLatex(newLatex);
           }
           if (data.error) {
             streamError = data.error + (data.action ? ` — ${data.action}` : '');
@@ -406,6 +417,7 @@ export default function ResumePage() {
 
       // Enter diff review mode (or auto-accept if no changes)
       if (newLatex.trim()) {
+        setLatex(newLatex);
         if (newLatex.trim() === latex.trim()) {
           // No changes — auto-accept
           setOriginalLatex(null);
@@ -468,7 +480,7 @@ export default function ResumePage() {
 
     autoTailorTriggeredRef.current = true;
     setAutoTailorStatus('Auto tailoring from extension...');
-    
+
     // First compile the existing PDF, then start tailoring
     compileLatex(latex).then(() => {
       handleTailor();
@@ -629,254 +641,228 @@ export default function ResumePage() {
   }, [currentVersionId]);
 
   return (
-    <div className="flex flex-col h-screen bg-retro-bg text-retro-text">
-      {/* Header */}
-      <header className="sticky top-0 bg-retro-surface retro-raised z-10 shrink-0">
-        <div className="retro-titlebar flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-retro-green text-lg tracking-wider">[OllaWeb v2.0]</h1>
-            <nav className="flex gap-1">
-              <Link
-                href="/"
-                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
-              >
-                Chat
-              </Link>
-              <span className="retro-sunken bg-retro-panel px-2 py-0.5 text-retro-green text-sm">
-                Resume
-              </span>
-              <Link
-                href="/finance"
-                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
-              >
-                Finance
-              </Link>
-            </nav>
-          </div>
-          <div className="flex items-center gap-2 text-retro-text text-sm">
+    <div className="flex h-screen bg-[#0a0a0a] text-foreground font-sans selection:bg-white/10 overflow-hidden relative">
+      {/* Sidebar - Tools & History */}
+      <aside className="w-[320px] bg-[#171717] flex flex-col border-r border-[#333] z-20">
+        <div className="p-4 border-b border-[#333] flex items-center gap-3">
+          <Link href="/" className="w-8 h-8 rounded-lg bg-white text-black flex items-center justify-center font-bold text-lg hover:scale-105 transition-transform shrink-0">V</Link>
+          <AppNav current="resume" />
+        </div>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-8">
+          {/* Job Input Section */}
+          <section className="flex flex-col gap-4">
+            <JobInput
+              jobPosting={jobPosting}
+              onJobPostingChange={setJobPosting}
+              onTailor={handleTailor}
+              isTailoring={isTailoring}
+              disabled={!latex.trim() || isReviewMode}
+              tailorError={tailorError}
+            />
+          </section>
+
+          <hr className="border-[#333]" />
+
+          {/* History Section */}
+          <section className="flex flex-col gap-4">
+            <div className="px-1 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Version History</span>
+            </div>
             <ResumeHistory
               versions={savedVersions}
               currentVersionId={currentVersionId}
-              isOpen={historyOpen}
-              onToggle={() => setHistoryOpen(h => !h)}
+              isOpen={true} // Always open in sidebar
+              onToggle={() => { }}
               onSelect={handleSelectVersion}
               onDelete={handleDeleteVersion}
             />
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">_</span>
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">[]</span>
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">X</span>
-          </div>
+          </section>
         </div>
-      </header>
 
-      {/* Model check overlay */}
-      {(modelCheck.checking || modelCheck.missing.length > 0 || modelCheck.error) && (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="retro-raised bg-retro-surface p-6 max-w-lg text-center">          {modelCheck.checking ? (
-            <>
-              <p className="text-retro-cyan retro-blink text-lg mb-2">Checking required models...</p>
-              <p className="text-retro-border-light text-sm">Connecting to Ollama</p>
-            </>
-          ) : modelCheck.error ? (
-            <>
-              <p className="text-retro-red text-lg mb-2">[ERROR]</p>
-              <p className="text-retro-text mb-4">{modelCheck.error}</p>
-              <p className="text-retro-border-light text-sm">Make sure Ollama is running: <span className="text-retro-cyan">ollama serve</span></p>
-            </>
-          ) : (
-            <>
-              <p className="text-retro-amber text-lg mb-3">[MISSING MODELS]</p>
-              <p className="text-retro-text mb-4">The following models are required but not installed:</p>
-              <div className="space-y-3 mb-4">
-                {modelCheck.missing.map((m) => {
-                  const progress = pullProgress[m];
-                  const isPulling = progress?.pulling;
-                  const isDone = progress?.done;
-                  const hasError = progress?.error;
-
-                  return (
-                    <div key={m} className="retro-sunken bg-retro-bg px-3 py-2 text-sm">
-                      <div className="flex items-center justify-between mb-1">
-                        <div>
-                          <span className={isDone ? 'text-retro-green' : 'text-retro-red'}>{isDone ? 'âœ“' : 'âœ—'}</span>{' '}
-                          <span className="text-retro-text-bright">{m}</span>
-                        </div>
-                        {!isPulling && !isDone && (
-                          <button
-                            type="button"
-                            onClick={() => handlePullModel(m)}
-                            className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-xs hover:bg-retro-blue hover:text-retro-text-bright"
-                          >
-                            [DOWNLOAD]
-                          </button>
-                        )}
-                      </div>
-                      {isPulling && (
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <div className="flex-1 retro-sunken bg-retro-bg h-3 overflow-hidden">
-                              <div
-                                className="h-full bg-retro-cyan transition-all duration-300"
-                                style={{ width: `${progress.percent}%` }}
-                              />
-                            </div>
-                            <span className="text-retro-cyan text-xs w-10 text-right">{progress.percent}%</span>
-                          </div>
-                          <p className="text-retro-border-light text-xs">{progress.status}</p>
-                        </div>
-                      )}
-                      {isDone && (
-                        <p className="text-retro-green text-xs">Downloaded successfully!</p>
-                      )}
-                      {hasError && (
-                        <p className="text-retro-red text-xs">Error: {progress.error}</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {modelCheck.missing.some((m) => !pullProgress[m]?.pulling && !pullProgress[m]?.done) && (
-                <button
-                  type="button"
-                  onClick={() => modelCheck.missing.forEach((m) => { if (!pullProgress[m]?.pulling && !pullProgress[m]?.done) handlePullModel(m); })}
-                  className="retro-raised bg-retro-panel text-retro-green px-4 py-1.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright mb-2"
-                >
-                  [DOWNLOAD ALL]
-                </button>
-              )}
-              <div>
-                <button
-                  type="button"
-                  onClick={() => checkModels()}
-                  className="retro-raised bg-retro-panel text-retro-text px-4 py-1.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright"
-                >
-                  [RETRY]
-                </button>
-              </div>
-            </>
-          )}
-          </div>
+        {/* Sidebar Footer */}
+        <div className="p-4 border-t border-[#333] bg-[#171717]/80 backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!latex.trim()}
+            className={`w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-semibold transition-all shadow-sm ${saved
+              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+              : 'bg-[#2f2f2f] text-white border border-[#444] hover:bg-[#3f3f3f]'
+              }`}
+          >
+            {saved ? 'Changes Saved' : 'Save Resume'}
+          </button>
         </div>
-      )}
+      </aside>
 
-      {/* Main content — 3 columns */}
-      {!modelCheck.checking && modelCheck.missing.length === 0 && !modelCheck.error && (
-        <main className="flex-1 flex overflow-hidden">
-          {/* Left panel: Save + Job */}
-          <div className="w-72 shrink-0 bg-retro-surface retro-raised flex flex-col overflow-y-auto">
-            {/* Save resume */}
-            <div className="p-3 border-b border-retro-border">
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={!latex.trim()}
-                className="retro-raised bg-retro-panel text-retro-green px-3 py-1 text-sm w-full hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-              >
-                {saved ? '[SAVED!]' : '[SAVE RESUME]'}
-              </button>
-            </div>
-            <div className="p-3 flex-1">
-              <JobInput
-                jobPosting={jobPosting}
-                onJobPostingChange={setJobPosting}
-                onTailor={handleTailor}
-                isTailoring={isTailoring}
-                disabled={!latex.trim() || isReviewMode}
-                tailorError={tailorError}
-              />
-            </div>
-          </div>
-
-          {/* Center panel: LaTeX Editor */}
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* Editor toolbar */}
-            <div className="bg-retro-surface retro-raised px-3 py-1.5 flex items-center gap-2 shrink-0">
-              <span className="text-retro-amber text-sm">
-                {isReviewMode ? '[DIFF REVIEW]' : '[LATEX EDITOR]'}
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col min-w-0 bg-[#0a0a0a] relative z-10">
+        {/* Top Action Bar */}
+        <header className="h-14 border-b border-[#333] flex items-center justify-between px-6 bg-[#0a0a0a]/50 backdrop-blur-md z-30">
+          <div className="flex items-center gap-4">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              {isReviewMode ? 'Diff Review' : 'LaTeX Editor'}
+            </h2>
+            {autoTailorStatus && (
+              <span className="text-xs bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded-full border border-blue-500/20">
+                {autoTailorStatus}
               </span>
-              <div className="flex-1" />
-
-              <input
-                type="file"
-                accept=".pdf"
-                onChange={handleUploadPDF}
-                ref={fileInputRef}
-                className="hidden"
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isExtracting || isReviewMode}
-                className="retro-raised bg-retro-panel text-retro-cyan px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-              >
-                {isExtracting ? '[EXTRACTING...]' : '[UPLOAD PDF]'}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleCompile}
-                disabled={isCompiling || !latex.trim() || isReviewMode}
-                className="retro-raised bg-retro-panel text-retro-green px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-              >
-                {isCompiling ? '[COMPILING...]' : '[COMPILE]'}
-              </button>
-
-              {pdfUrl && (
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  disabled={isReviewMode}
-                  className="retro-raised bg-retro-panel text-retro-amber px-2 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40"
-                >
-                  [DOWNLOAD]
-                </button>
-              )}
-            </div>
-
-            {/* Status bar */}
-            {(extractStatus || isTailoring || isReviewMode || autoTailorStatus) && (
-              <div className="bg-retro-bg px-3 py-1 text-sm shrink-0">
-                {autoTailorStatus && <span className="text-retro-cyan mr-2">{autoTailorStatus}</span>}
-                {extractStatus && <span className="text-retro-cyan">{extractStatus}</span>}
-                {isTailoring && <span className="text-retro-amber retro-blink">Tailoring resume for job posting...</span>}
-                {isReviewMode && !isTailoring && (
-                  <span className="text-retro-cyan">Review changes below. [ACCEPT] to keep tailored version, [REJECT] to revert.</span>
-                )}
-              </div>
             )}
+          </div>
 
-            {/* Editor or Diff Review */}
-            <div className="flex-1 overflow-hidden">
-              {isReviewMode && originalLatex !== null ? (
-                <DiffViewer
-                  originalText={originalLatex}
-                  modifiedText={latex}
-                  onAccept={handleAcceptTailored}
-                  onReject={handleRejectTailored}
-                />
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={handleUploadPDF}
+              ref={fileInputRef}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isExtracting || isReviewMode}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[#333] hover:bg-[#212121] transition-colors disabled:opacity-30"
+            >
+              {isExtracting ? 'Extracting...' : 'Upload PDF'}
+            </button>
+            <button
+              onClick={handleCompile}
+              disabled={isCompiling || !latex.trim() || isReviewMode}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-30 flex items-center gap-2 shadow-sm shadow-blue-900/20"
+            >
+              {isCompiling ? (
+                <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+              ) : null}
+              {isCompiling ? 'Compiling...' : 'Compile'}
+            </button>
+            {pdfUrl && (
+              <button
+                onClick={handleDownload}
+                disabled={isReviewMode}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[#333] hover:bg-[#212121] transition-colors disabled:opacity-30 text-orange-400"
+              >
+                Download PDF
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Editor / Preview Work Area */}
+        <div className="flex-1 flex overflow-hidden p-6 gap-6">
+          {/* Editor Side */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {isReviewMode && originalLatex !== null ? (
+              <DiffViewer
+                originalText={originalLatex}
+                modifiedText={latex}
+                onAccept={handleAcceptTailored}
+                onReject={handleRejectTailored}
+              />
+            ) : (
+              <LaTeXEditor
+                value={latex}
+                onChange={setLatex}
+                readOnly={isExtracting || isTailoring}
+              />
+            )}
+          </div>
+
+          {/* Preview Side */}
+          <div className="w-[500px] xl:w-[650px] shrink-0 h-full">
+            <PDFPreview
+              pdfUrl={pdfUrl}
+              isCompiling={isCompiling}
+              error={compileError}
+            />
+          </div>
+        </div>
+
+        {/* Model Check Overlay */}
+        {(modelCheck.checking || modelCheck.missing.length > 0 || modelCheck.error) && (
+          <div className="absolute inset-0 z-50 bg-[#0a0a0a]/90 backdrop-blur-sm flex items-center justify-center p-8">
+            <div className="max-w-md w-full bg-[#171717] border border-[#333] rounded-2xl shadow-2xl p-8 text-center space-y-6">
+              {modelCheck.checking ? (
+                <div className="space-y-4 py-8">
+                  <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto" />
+                  <div>
+                    <h3 className="text-lg font-semibold">Checking requirements</h3>
+                    <p className="text-sm text-muted-foreground mt-1">Establishing connection to local AI models...</p>
+                  </div>
+                </div>
+              ) : modelCheck.error ? (
+                <div className="space-y-4">
+                  <div className="w-12 h-12 bg-red-500/10 rounded-full flex items-center justify-center mx-auto text-red-500">
+                    <AlertCircle size={32} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-red-400 text-uppercase">Ollama Connection Failed</h3>
+                    <p className="text-sm text-muted-foreground mt-2">{modelCheck.error}</p>
+                    <div className="mt-6 p-3 bg-black/40 rounded-lg text-xs font-mono text-left border border-[#333]">
+                      $ ollama serve
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => checkModels()}
+                    className="w-full bg-white text-black py-2.5 rounded-xl font-semibold hover:bg-neutral-200 transition-colors"
+                  >
+                    Retry Connection
+                  </button>
+                </div>
               ) : (
-                <LaTeXEditor
-                  value={latex}
-                  onChange={setLatex}
-                  readOnly={isExtracting || isTailoring}
-                />
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Missing Required Models</h3>
+                  <p className="text-sm text-muted-foreground">The following models are needed for resume analysis and tailoring:</p>
+
+                  <div className="space-y-3 mt-4">
+                    {modelCheck.missing.map((m) => {
+                      const progress = pullProgress[m];
+                      return (
+                        <div key={m} className="bg-[#212121] border border-[#333] rounded-xl p-4 text-left">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium">{m}</span>
+                            {!progress?.pulling && !progress?.done && (
+                              <button
+                                onClick={() => handlePullModel(m)}
+                                className="text-xs text-blue-400 font-bold hover:underline"
+                              >
+                                Download
+                              </button>
+                            )}
+                          </div>
+                          {progress?.pulling && (
+                            <div className="space-y-2">
+                              <div className="h-1.5 bg-black/40 rounded-full overflow-hidden">
+                                <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${progress.percent}%` }} />
+                              </div>
+                              <p className="text-[10px] text-muted-foreground uppercase tracking-widest">{progress.status} — {progress.percent}%</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => modelCheck.missing.forEach((m) => { if (!pullProgress[m]?.pulling && !pullProgress[m]?.done) handlePullModel(m); })}
+                    className="w-full bg-white text-black py-2.5 rounded-xl font-semibold hover:bg-neutral-200 transition-colors mt-4"
+                  >
+                    Download All
+                  </button>
+                </div>
               )}
             </div>
           </div>
-
-          {/* Right panel: PDF Preview */}
-          <div className="w-[750px] shrink-0 flex flex-col">
-            <div className="flex-1">
-              <PDFPreview
-                pdfUrl={pdfUrl}
-                isCompiling={isCompiling}
-                error={compileError}
-              />
-            </div>
-          </div>
-        </main>
-      )}
+        )}
+      </main>
     </div>
   );
 }
 
+export default function ResumePage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center bg-[#0a0a0a] text-foreground">Loading resume workspace...</div>}>
+      <ResumePageContent />
+    </Suspense>
+  );
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
+import { BarChart4, AlertCircle } from 'lucide-react';
 import type { FinancialStatementsData, StatementType, StatementPeriodType } from '../../lib/types';
 
 interface FinancialStatementsProps {
@@ -23,6 +24,7 @@ function formatValue(v: number | null): string {
   if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
   return `${sign}$${abs.toFixed(2)}`;
 }
+
 
 export function FinancialStatements({ ticker }: FinancialStatementsProps) {
   const [statementType, setStatementType] = useState<StatementType>('income');
@@ -60,110 +62,124 @@ export function FinancialStatements({ ticker }: FinancialStatementsProps) {
 
   if (!ticker) {
     return (
-      <div className="flex items-center justify-center h-full text-retro-border-light text-xs">
-        Load a ticker to view financial statements
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4 opacity-30">
+        <BarChart4 size={48} />
+        <p className="text-xs font-bold uppercase tracking-widest">Select an asset to view fundamentals</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Tabs */}
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-retro-border-light shrink-0">
-        {TABS.map(tab => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setStatementType(tab.key)}
-            className={`px-2 py-0.5 text-xs ${
-              statementType === tab.key
-                ? 'retro-sunken bg-retro-panel text-retro-green'
-                : 'retro-raised bg-retro-surface text-retro-text hover:text-retro-text-bright'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-        <div className="ml-auto flex gap-1">
-          <button
-            type="button"
-            onClick={() => setPeriodType('annual')}
-            className={`px-2 py-0.5 text-xs ${
-              periodType === 'annual'
-                ? 'retro-sunken bg-retro-panel text-retro-amber'
-                : 'retro-raised bg-retro-surface text-retro-text hover:text-retro-text-bright'
-            }`}
-          >
-            Annual
-          </button>
-          <button
-            type="button"
-            onClick={() => setPeriodType('quarterly')}
-            className={`px-2 py-0.5 text-xs ${
-              periodType === 'quarterly'
-                ? 'retro-sunken bg-retro-panel text-retro-amber'
-                : 'retro-raised bg-retro-surface text-retro-text hover:text-retro-text-bright'
-            }`}
-          >
-            Qtrly
-          </button>
+    <div className="flex flex-col h-full bg-[#0a0a0a]/30">
+      {/* Search/Filter Bar */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-[#333] shrink-0 bg-[#0a0a0a]/50 backdrop-blur-sm sticky top-0 z-20">
+        <div className="flex items-center gap-1 bg-[#171717]/50 rounded-xl p-1 border border-[#333]">
+          {TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setStatementType(tab.key)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
+                statementType === tab.key
+                  ? 'bg-[#2f2f2f] text-white shadow-sm ring-1 ring-white/5'
+                  : 'text-muted-foreground hover:text-white hover:bg-white/5'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-1 bg-[#171717]/50 rounded-xl p-1 border border-[#333]">
+          {[
+            { key: 'annual' as const, label: 'Annual' },
+            { key: 'quarterly' as const, label: 'Quarterly' }
+          ].map(p => (
+            <button
+              key={p.key}
+              onClick={() => setPeriodType(p.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                periodType === p.key
+                  ? 'bg-white/10 text-white'
+                  : 'text-muted-foreground hover:text-white'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto custom-scrollbar relative">
         {loading && (
-          <div className="flex items-center justify-center py-8">
-            <span className="text-retro-cyan retro-blink text-sm">Loading financial data...</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0a0a]/50 backdrop-blur-[2px] z-30">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.2em] animate-pulse">Aggregating Financials...</span>
+            </div>
           </div>
         )}
+        
         {error && (
-          <div className="flex items-center justify-center py-8">
-            <span className="text-retro-red text-xs">[ERROR] {error}</span>
+          <div className="flex items-center justify-center p-8 h-full">
+            <div className="max-w-md bg-red-500/10 border border-red-500/20 text-red-400 p-6 rounded-2xl flex items-center gap-4">
+              <AlertCircle size={24} />
+              <div>
+                <p className="text-sm font-bold">Data Fetching Failed</p>
+                <p className="text-xs opacity-80">{error}</p>
+              </div>
+            </div>
           </div>
         )}
+
         {data && !loading && (
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-retro-border-light">
-                <th className="text-left text-retro-amber px-3 py-1.5 sticky left-0 bg-retro-surface">Item</th>
-                {data.periods.map((p, i) => (
-                  <th key={i} className="text-right text-retro-amber px-2 py-1.5 whitespace-nowrap">{p}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((row, i) => {
-                const isHighlight = ['Gross Profit', 'Operating Income', 'Net Income', 'EBITDA',
-                  'Total Assets', "Stockholders' Equity", 'Free Cash Flow', 'Operating Cash Flow',
-                  'Total Revenue', 'Diluted EPS'].includes(row.label);
-                return (
-                  <tr
-                    key={row.key}
-                    className={`border-b border-retro-border-dark ${
-                      isHighlight ? 'bg-retro-panel' : ''
-                    } ${i % 2 === 0 ? '' : 'bg-opacity-50'}`}
-                  >
-                    <td className={`text-left px-3 py-1 sticky left-0 ${
-                      isHighlight ? 'text-retro-green bg-retro-panel font-bold' : 'text-retro-text bg-retro-surface'
-                    }`}>
-                      {row.label}
-                    </td>
-                    {row.values.map((v, j) => (
-                      <td
-                        key={j}
-                        className={`text-right px-2 py-1 font-mono whitespace-nowrap ${
-                          v != null && v < 0 ? 'text-retro-red' : 'text-retro-text-bright'
-                        }`}
-                      >
-                        {formatValue(v)}
+          <div className="min-w-full inline-block align-middle">
+            <table className="w-full border-separate border-spacing-0">
+              <thead>
+                <tr className="bg-[#171717]/30">
+                  <th className="text-left text-[10px] uppercase tracking-[0.2em] font-bold text-muted-foreground px-6 py-4 sticky left-0 bg-[#0a0a0a] border-b border-[#333] z-10">Financial Item</th>
+                  {data.periods.map((p, i) => (
+                    <th key={i} className="text-right text-[10px] uppercase tracking-[0.1em] font-bold text-muted-foreground px-4 py-4 border-b border-[#333] whitespace-nowrap">
+                      {p}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1f1f1f]">
+                {data.rows.map((row, i) => {
+                  const isHighlight = ['Gross Profit', 'Operating Income', 'Net Income', 'EBITDA',
+                    'Total Assets', "Stockholders' Equity", 'Free Cash Flow', 'Operating Cash Flow',
+                    'Total Revenue', 'Diluted EPS'].includes(row.label);
+                  return (
+                    <tr
+                      key={row.key}
+                      className={`group hover:bg-white/[0.02] transition-colors ${
+                        isHighlight ? 'bg-white/[0.01]' : ''
+                      }`}
+                    >
+                      <td className={`text-left px-6 py-3 sticky left-0 z-10 border-r border-[#1f1f1f] ${
+                        isHighlight 
+                          ? 'bg-[#111] text-white font-bold text-sm' 
+                          : 'bg-[#0a0a0a] text-muted-foreground text-xs group-hover:text-foreground transition-colors'
+                      }`}>
+                        {row.label}
                       </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      {row.values.map((v, j) => (
+                        <td
+                          key={j}
+                          className={`text-right px-4 py-3 font-mono text-xs tabular-nums ${
+                            v != null && v < 0 ? 'text-red-400' : 'text-gray-300'
+                          } ${isHighlight ? 'font-bold' : ''}`}
+                        >
+                          {formatValue(v)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

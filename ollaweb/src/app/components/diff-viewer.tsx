@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import * as Diff from 'diff';
+import { Check, X, FileDiff, ArrowRight } from "lucide-react";
 
 interface DiffViewerProps {
   originalText: string;
@@ -27,55 +28,69 @@ export function DiffViewer({ originalText, modifiedText, onAccept, onReject }: D
   let lineNum = 0;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-[#0f0f0f] border border-[#333] rounded-xl overflow-hidden shadow-xl">
       {/* Toolbar */}
-      <div className="bg-retro-surface retro-raised px-3 py-1.5 flex items-center gap-2 shrink-0">
-        <span className="text-retro-cyan text-sm font-bold">[DIFF REVIEW]</span>
-        <span className="text-retro-green text-xs">+{addedCount}</span>
-        <span className="text-retro-red text-xs">-{removedCount}</span>
+      <div className="bg-[#1a1a1a] border-b border-[#333] px-4 py-3 flex items-center gap-4 shrink-0">
+        <div className="flex items-center gap-2">
+           <FileDiff size={18} className="text-blue-400" />
+           <span className="text-sm font-semibold">Review Changes</span>
+        </div>
+        
+        <div className="flex items-center gap-3">
+           <div className="flex items-center gap-1.5 px-2 py-0.5 bg-green-500/10 border border-green-500/20 rounded text-[10px] font-bold text-green-400">
+              +{addedCount} lines
+           </div>
+           <div className="flex items-center gap-1.5 px-2 py-0.5 bg-red-500/10 border border-red-500/20 rounded text-[10px] font-bold text-red-400">
+              -{removedCount} lines
+           </div>
+        </div>
+
         <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onAccept}
-          className="retro-raised bg-retro-panel text-retro-green px-3 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright"
-        >
-          [ACCEPT]
-        </button>
-        <button
-          type="button"
-          onClick={onReject}
-          className="retro-raised bg-retro-panel text-retro-red px-3 py-0.5 text-sm hover:bg-retro-blue hover:text-retro-text-bright"
-        >
-          [REJECT]
-        </button>
+        
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onReject}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-red-500/30 bg-red-500/5 text-red-400 rounded-lg text-xs font-semibold hover:bg-red-500/10 transition-all"
+          >
+            <X size={14} /> Revert
+          </button>
+          <button
+            type="button"
+            onClick={onAccept}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-black rounded-lg text-xs font-semibold hover:bg-neutral-200 transition-all shadow-sm"
+          >
+            <Check size={14} /> Accept
+          </button>
+        </div>
       </div>
 
       {/* Diff content */}
-      <div className="flex-1 overflow-auto retro-sunken bg-retro-bg">
-        <pre className="text-sm leading-relaxed m-0" style={{ fontFamily: '"Courier New", monospace', fontSize: '14px' }}>
+      <div className="flex-1 overflow-auto custom-scrollbar">
+        <pre className="text-[13px] leading-6 m-0 p-4" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
           {changes.map((part, i) => {
             const lines = part.value.replace(/\n$/, '').split('\n');
             return lines.map((line, j) => {
               lineNum++;
               const bgClass = part.added
-                ? 'diff-added'
+                ? 'bg-green-500/10'
                 : part.removed
-                  ? 'diff-removed'
+                  ? 'bg-red-500/10'
                   : '';
               const textClass = part.added
-                ? 'text-retro-green'
+                ? 'text-green-400'
                 : part.removed
-                  ? 'text-retro-red'
-                  : 'text-retro-text';
+                  ? 'text-red-400'
+                  : 'text-neutral-400';
               const prefix = part.added ? '+' : part.removed ? '-' : ' ';
 
               return (
-                <div key={`${i}-${j}`} className={`${bgClass} px-2 min-h-[1.5em]`}>
-                  <span className="text-retro-border-light inline-block w-12 text-right mr-3 select-none opacity-50">
+                <div key={`${i}-${j}`} className={`${bgClass} flex items-start group`}>
+                  <span className="text-neutral-600 inline-block w-12 text-right mr-4 select-none pr-1 border-r border-[#333]">
                     {lineNum}
                   </span>
-                  <span className={`${textClass} select-none mr-1 font-bold`}>{prefix}</span>
-                  <span className={textClass}>{line}</span>
+                  <span className={`${textClass} select-none mr-3 font-bold w-4 flex-shrink-0`}>{prefix}</span>
+                  <span className={`${textClass} break-all`}>{line}</span>
                 </div>
               );
             });
@@ -85,3 +100,4 @@ export function DiffViewer({ originalText, modifiedText, onAccept, onReject }: D
     </div>
   );
 }
+

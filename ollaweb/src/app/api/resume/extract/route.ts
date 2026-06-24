@@ -7,7 +7,7 @@ export async function POST(req: Request) {
 
     const formData = await req.formData();
     const file = formData.get('pdf') as File | null;
-    const model = (formData.get('model') as string) || 'llama3.2';
+    const model = (formData.get('model') as string) || 'gemma4:e4b';
 
     if (!file) {
       return Response.json({ error: 'No PDF file provided' }, { status: 400 });

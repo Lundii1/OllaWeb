@@ -69,16 +69,17 @@ export async function POST(req: Request) {
       return new Response(JSON.stringify({ error: 'Exactly 3 models required' }), { status: 400 });
     }
 
-    // Check all models are installed
+    // Ensure each model is available and warm up cloud models before streaming
     for (const model of models) {
       if (!await checkModelInstalled(model)) {
-        if (!await installModel(model, (progress) => console.log(progress))) {
-          return new Response(
-            JSON.stringify({ error: `Model ${model} installation failed` }),
-            { status: 500 }
-          );
+        if (!await installModel(model, (progress) => console.log(`Installing ${model}: ${progress}`))) {
+          return new Response(JSON.stringify({ error: `Model ${model} installation failed` }), { status: 500 });
         }
       }
+    }
+
+    for (const model of models) {
+      await pingModel(model);
     }
 
     // Process image if present
@@ -154,25 +155,11 @@ export async function POST(req: Request) {
         };
 
         try {
-          // === Phase 0: Health Check / Warm-up ===
-          for (const model of models) {
-            const ready = await pingModel(model);
-            emit({
-              event: 'health_check',
-              payload: { model, status: ready ? 'ready' : 'failed' },
-            });
-          }
-
-          // === Phase 1: Individual responses ===
+          // === Phase 0: Individual responses (sequential to avoid cloud provider conflicts) ===
           const individualResults: string[] = ['', '', ''];
-          const modelAbortControllers = models.map(() => new AbortController());
 
-          const promises = models.map(async (model, index) => {
+          for (const [index, model] of models.entries()) {
             emit({ event: 'individual_start', payload: { model, index } });
-
-            const timeoutId = setTimeout(() => {
-              modelAbortControllers[index].abort();
-            }, MODEL_TIMEOUT_MS);
 
             try {
               await withRetry(
@@ -180,7 +167,6 @@ export async function POST(req: Request) {
                   const result = await streamText({
                     model: ollama(model),
                     messages: processedMessages,
-                    abortSignal: modelAbortControllers[index].signal,
                     ...(webSystemPrompt ? { system: webSystemPrompt } : {}),
                   });
 
@@ -195,22 +181,18 @@ export async function POST(req: Request) {
                 { maxRetries: 1, delayMs: 3000, label: model }
               );
 
-              clearTimeout(timeoutId);
               emit({
                 event: 'individual_complete',
                 payload: { index, model, fullText: individualResults[index] },
               });
             } catch (error) {
-              clearTimeout(timeoutId);
               const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
               emit({
                 event: 'individual_error',
                 payload: { index, model, error: classified.message, action: classified.action },
               });
             }
-          });
-
-          await Promise.allSettled(promises);
+          }
 
           // Filter successful responses
           const successfulResponses = models
@@ -222,7 +204,7 @@ export async function POST(req: Request) {
             return;
           }
 
-          // === Phase 1.5: Optional Debate Round ===
+          // === Phase 1: Optional Debate Round ===
           let debateClarifications = '';
           if (enableDebate && successfulResponses.length >= 2) {
             emit({ event: 'debate_start', payload: {} });
@@ -241,7 +223,6 @@ export async function POST(req: Request) {
                     }\n\nIdentify the single biggest point of disagreement between these advisors in 1-2 sentences. If they all substantially agree, reply with exactly: NONE`,
                   },
                 ],
-                abortSignal: AbortSignal.timeout(30_000),
               });
 
               let disagreementText = '';
@@ -267,7 +248,6 @@ export async function POST(req: Request) {
                         },
                       ],
                       maxTokens: 200,
-                      abortSignal: AbortSignal.timeout(30_000),
                     });
 
                     let clarText = '';
@@ -303,9 +283,6 @@ export async function POST(req: Request) {
           const synthesisUserPrompt =
             `Original question: "${userQuestion}"\n\nThe following advisors have responded independently:\n\n${advisorBlocks}${debateClarifications}\n\nSynthesize these into a single answer. Focus on answering the original question, not on describing what each advisor said.`;
 
-          const synthesisAbort = new AbortController();
-          const synthesisTimeout = setTimeout(() => synthesisAbort.abort(), SYNTHESIS_TIMEOUT_MS);
-
           try {
             const synthesisResult = await streamText({
               model: ollama(moderatorModel),
@@ -319,7 +296,6 @@ export async function POST(req: Request) {
                   content: synthesisUserPrompt,
                 },
               ],
-              abortSignal: synthesisAbort.signal,
             });
 
             let consensusText = '';
@@ -328,12 +304,9 @@ export async function POST(req: Request) {
               emit({ event: 'synthesis_chunk', payload: { text: chunk } });
             }
 
-            clearTimeout(synthesisTimeout);
-
             const confidence = extractConfidence(consensusText);
             emit({ event: 'synthesis_complete', payload: { fullText: consensusText, confidence } });
           } catch (error) {
-            clearTimeout(synthesisTimeout);
             const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
             emit({
               event: 'error',

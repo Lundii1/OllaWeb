@@ -152,5 +152,11 @@ export function computeBollingerBands(
     }
   }
 
+  while (upper.length < period) {
+    upper.push(null);
+    middle.push(null);
+    lower.push(null);
+  }
+
   return { upper, middle, lower };
 }

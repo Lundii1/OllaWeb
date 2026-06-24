@@ -5,7 +5,13 @@
       "Bash(npx next build)",
       "Bash(npm install:*)",
       "Bash(npm ls:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(Remove-Item -Recurse -Force .next)",
+      "WebSearch",
+      "Bash(curl -sL \"https://www.reactbits.dev/components/beams\" | head -500)",
+      "Bash(curl -sL \"https://api.github.com/search/repositories?q=reactbits+beams\" 2>/dev/null | python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(i['full_name'],i['html_url']\\) for i in d.get\\('items',[]\\)]\" 2>/dev/null | head -10)",
+      "Bash(curl -sL \"https://api.github.com/repos/Blazity/next-enterprise\" 2>/dev/null | python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('message','found'\\)\\)\" 2>/dev/null; curl -sL \"https://api.github.com/search/code?q=reactbits+beams+filename:Beams\" 2>/dev/null | python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('total_count','unknown'\\)\\)\" 2>/dev/null | head -5)",
+      "WebFetch(domain:www.reactbits.dev)"
     ]
   }
 }

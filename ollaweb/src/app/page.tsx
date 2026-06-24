@@ -2,39 +2,79 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
-import { useChat } from "ai/react";
-import { InstallDialog } from "./components/install-dialog";
-import { CodeBlock } from "./components/code-block";
+import { ImagePlus } from "lucide-react";
 import { CouncilSelector } from "./components/council-selector";
 import { CouncilResponse } from "./components/council-response";
-import { AVAILABLE_MODELS } from "../lib/types";
-import type { ChatMode, CouncilState, CouncilEvent, IndividualResponse, Message, Conversation, ConfidenceLevel } from "../lib/types";
+import { AVAILABLE_MODELS, DEFAULT_COUNCIL_MODELS } from "../lib/types";
+import type { ChatMode, CouncilState, CouncilEvent, IndividualResponse, Message, Conversation } from "../lib/types";
 import { ChatHistory } from "./components/chat-history";
+import { Meteors } from "./components/meteors";
+import { Persona } from "./components/persona";
+import type { PersonaState } from "./components/persona";
+import { Reasoning, ReasoningTrigger, ReasoningContent } from "@/components/ai/reasoning";
+import { MarkdownMessage } from "./components/markdown-message";
 import { listConversations, getConversation, saveConversation, deleteConversation as deleteConvo, generateTitle, getSavedCouncilConfig, setSavedCouncilConfig } from "../lib/conversation-storage";
+import { applyCouncilEvent, createCouncilResult } from "../lib/council-result";
+import { splitChatContent } from "../lib/chat-content";
+
+function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={`size-[18px] transition-transform ${collapsed ? '' : 'rotate-180'}`}
+      aria-hidden="true"
+    >
+      <path
+        d="M6 2V14M5.2 2H10.8C11.9201 2 12.4802 2 12.908 2.21799C13.2843 2.40973 13.5903 2.71569 13.782 3.09202C14 3.51984 14 4.0799 14 5.2V10.8C14 11.9201 14 12.4802 13.782 12.908C13.5903 13.2843 13.2843 13.5903 12.908 13.782C12.4802 14 11.9201 14 10.8 14H5.2C4.07989 14 3.51984 14 3.09202 13.782C2.71569 13.5903 2.40973 13.2843 2.21799 12.908C2 12.4802 2 11.9201 2 10.8V5.2C2 4.07989 2 3.51984 2.21799 3.09202C2.40973 2.71569 2.71569 2.40973 3.09202 2.21799C3.51984 2 4.0799 2 5.2 2Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.33"
+      />
+    </svg>
+  );
+}
 
 export default function Chat() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activeRequestIdRef = useRef<string | null>(null);
+  const conversationDirtyRef = useRef(false);
 
-  const [model, setModel] = useState("llama3.2");
+  const [model, setModel] = useState<string>(AVAILABLE_MODELS[0].value);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [isInstalling, setIsInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState("");
   const [isResponding, setIsResponding] = useState(false);
+  const isRespondingRef = useRef(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [debateEnabled, setDebateEnabled] = useState(false);
 
   // Chat history state
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [savedConversations, setSavedConversations] = useState<Conversation[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Council state — initialize directly from localStorage to avoid race conditions
   const [chatMode, setChatMode] = useState<ChatMode>('single');
+  const handleModeChange = useCallback((mode: ChatMode) => {
+    setChatMode(mode);
+    if (mode === 'single') {
+      setModel((prev: string) => AVAILABLE_MODELS.some(m => m.value === prev) ? prev : AVAILABLE_MODELS[0].value);
+    }
+  }, []);
   const [councilModels, setCouncilModels] = useState<[string, string, string]>(() => {
     const saved = typeof window !== 'undefined' ? getSavedCouncilConfig() : null;
-    return saved?.models ? [...saved.models] : ['llama3.2', 'mistral', 'deepseek-r1:7b'];
+    const availableModels = new Set<string>(AVAILABLE_MODELS.map(m => m.value));
+    return saved?.models?.every(m => availableModels.has(m))
+      ? [...saved.models]
+      : [...DEFAULT_COUNCIL_MODELS];
   });
   const [moderatorIndex, setModeratorIndex] = useState(() => {
     const saved = typeof window !== 'undefined' ? getSavedCouncilConfig() : null;
@@ -47,17 +87,13 @@ export default function Chat() {
     moderatorModel: '',
   });
 
-  const {
-    messages,
-    input,
-    handleInputChange,
-    setMessages,
-    setInput,
-    isLoading: isTyping
-  } = useChat({
-    api: "/api/chat",
-    body: { model }
-  });
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+  }, []);
+  const [isTyping, setIsTyping] = useState(false);
+  const isTypingRef = useRef(false);
 
   // Load saved conversations on mount
   useEffect(() => {
@@ -69,12 +105,14 @@ export default function Chat() {
     setSavedCouncilConfig({ models: councilModels, moderatorIndex });
   }, [councilModels, moderatorIndex]);
 
-  // Auto-save conversation when response finishes
+  // Sync refs with state for stale-closure-safe access
   const currentConversationIdRef = useRef(currentConversationId);
   currentConversationIdRef.current = currentConversationId;
+  isRespondingRef.current = isResponding;
+  isTypingRef.current = isTyping;
 
   useEffect(() => {
-    if (isResponding || messages.length === 0) return;
+    if (isResponding || messages.length === 0 || !conversationDirtyRef.current) return;
     const id = currentConversationIdRef.current;
     if (!id) return;
 
@@ -91,28 +129,45 @@ export default function Chat() {
       updatedAt: Date.now(),
     };
     saveConversation(convo);
+    conversationDirtyRef.current = false;
     setSavedConversations(listConversations());
   }, [isResponding, messages, chatMode, model, councilModels, moderatorIndex]);
 
+  const cancelActiveRequest = useCallback(() => {
+    activeRequestIdRef.current = null;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    isRespondingRef.current = false;
+    isTypingRef.current = false;
+    setIsResponding(false);
+    setIsTyping(false);
+  }, []);
+
   const handleNewChat = useCallback(() => {
+    cancelActiveRequest();
+    conversationDirtyRef.current = false;
     setMessages([]);
     setCurrentConversationId(null);
     setInput("");
+    setImageFile(null);
+    setImagePreview(null);
+    if (inputRef.current) inputRef.current.value = "";
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setCouncilState({ phase: 'idle', individualResponses: [], consensusText: '', moderatorModel: '' });
-    setHistoryOpen(false);
-  }, [setMessages, setInput]);
+  }, [cancelActiveRequest]);
 
   const handleSelectConversation = useCallback((id: string) => {
     const convo = getConversation(id);
     if (!convo) return;
+    cancelActiveRequest();
+    conversationDirtyRef.current = false;
     setMessages(convo.messages as any);
     setCurrentConversationId(id);
     setChatMode(convo.chatMode);
     setModel(convo.model);
     // Council config is universal — don't override from per-conversation data
     setCouncilState({ phase: 'idle', individualResponses: [], consensusText: '', moderatorModel: '' });
-    setHistoryOpen(false);
-  }, [setMessages]);
+  }, [cancelActiveRequest]);
 
   const handleDeleteConversation = useCallback((id: string) => {
     deleteConvo(id);
@@ -140,57 +195,67 @@ export default function Chat() {
     : councilModels.some(m => visionModelValues.includes(m));
 
   // Single AI submit handler (existing logic)
-  const handleSingleSubmit = useCallback(async () => {
+  const handleSingleSubmit = useCallback(async (
+    submittedInput: string,
+    priorMessages: Message[],
+    currentImageFile: File | null,
+    requestId: string
+  ) => {
     setIsResponding(true);
+    setIsTyping(true);
 
     // Auto-prefix with web: when search toggle is enabled
-    const effectiveInput = (webSearchEnabled && !input.trim().match(/^web:\s/i))
-      ? `web: ${input}`
-      : input;
+    const effectiveInput = (webSearchEnabled && !submittedInput.trim().match(/^web:\s/i))
+      ? `web: ${submittedInput}`
+      : submittedInput;
 
     const formData = new FormData();
-    if (imageFile) formData.append("image", imageFile);
+    if (currentImageFile) formData.append("image", currentImageFile);
 
-    const newMessages = [
-      ...messages,
-      { role: 'user', content: effectiveInput, image: imageFile ? URL.createObjectURL(imageFile) : undefined }
+    const requestMessages = [
+      ...priorMessages.map(message => ({ role: message.role, content: message.content })),
+      { role: 'user', content: effectiveInput }
     ];
 
-    formData.append("messages", JSON.stringify(newMessages));
+    formData.append("messages", JSON.stringify(requestMessages));
     formData.append("model", model);
 
+    const assistantMessageId = Date.now().toString() + '-assistant';
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      setInput("");
-      setImageFile(null);
-      setImagePreview(null);
-
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        role: 'user',
-        content: input,
-        image: imageFile ? URL.createObjectURL(imageFile) : undefined
-      }]);
-
-      const assistantMessageId = Date.now().toString() + '-assistant';
-
       const response = await fetch("/api/chat", {
         method: "POST",
-        body: formData
+        body: formData,
+        signal: controller.signal,
       });
 
+      if (!response.ok) {
+        const err = await response.json().catch(() => null);
+        throw new Error(err?.message || err?.error || `Chat request failed (${response.status})`);
+      }
+
       const reader = response.body?.getReader();
-      if (!reader) return;
+      if (!reader) throw new Error('Chat response did not include a readable stream');
 
       const decoder = new TextDecoder();
-      let done = false;
       let responseText = "";
 
-      while (!done) {
-        const { value, done: readerDone } = await reader.read();
-        done = readerDone;
-        responseText += decoder.decode(value || new Uint8Array());
+      while (true) {
+        const { value, done } = await reader.read();
+        if (activeRequestIdRef.current !== requestId) {
+          await reader.cancel();
+          return;
+        }
+        if (done) {
+          responseText += decoder.decode();
+          break;
+        }
+        responseText += decoder.decode(value, { stream: true });
 
         setMessages(prev => {
+          if (activeRequestIdRef.current !== requestId) return prev;
           const existingMessageIndex = prev.findIndex(msg => msg.id === assistantMessageId);
 
           if (existingMessageIndex !== -1) {
@@ -214,12 +279,35 @@ export default function Chat() {
         fileInputRef.current.value = "";
       }
     } catch (error) {
+      if ((error as Error).name === 'AbortError' || activeRequestIdRef.current !== requestId) return;
       console.error("Chat error:", error);
-      setMessages(prev => prev.filter(msg => !msg.id.endsWith('-assistant')));
+      const errorMessage = error instanceof Error ? error.message : 'Unknown chat error';
+      setMessages(prev => {
+        const existingMessageIndex = prev.findIndex(msg => msg.id === assistantMessageId);
+        if (existingMessageIndex !== -1) {
+          const updated = [...prev];
+          updated[existingMessageIndex] = {
+            ...updated[existingMessageIndex],
+            content: `Error: ${errorMessage}`
+          };
+          return updated;
+        }
+
+        return [...prev, {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: `Error: ${errorMessage}`
+        }];
+      });
     } finally {
-      setIsResponding(false);
+      if (activeRequestIdRef.current === requestId) {
+        activeRequestIdRef.current = null;
+        abortControllerRef.current = null;
+        setIsResponding(false);
+        setIsTyping(false);
+      }
     }
-  }, [imageFile, messages, input, model, setMessages, setInput, webSearchEnabled]);
+  }, [model, setMessages, webSearchEnabled]);
 
   // Council event dispatcher
   const dispatchCouncilEvent = useCallback((event: CouncilEvent) => {
@@ -283,7 +371,12 @@ export default function Chat() {
   }, []);
 
   // Council submit handler
-  const handleCouncilSubmit = useCallback(async () => {
+  const handleCouncilSubmit = useCallback(async (
+    submittedInput: string,
+    priorMessages: Message[],
+    currentImageFile: File | null,
+    requestId: string
+  ) => {
     setIsResponding(true);
 
     const initialResponses: IndividualResponse[] = councilModels.map((m, i) => ({
@@ -301,52 +394,49 @@ export default function Chat() {
     });
 
     // Auto-prefix with web: when search toggle is enabled
-    const currentInput = (webSearchEnabled && !input.trim().match(/^web:\s/i))
-      ? `web: ${input}`
-      : input;
-    const currentImageFile = imageFile;
-
-    setInput("");
-    setImageFile(null);
-    setImagePreview(null);
-
-    // Add user message to history (show clean input without web: prefix)
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      role: 'user',
-      content: input,
-    }]);
-
+    const currentInput = (webSearchEnabled && !submittedInput.trim().match(/^web:\s/i))
+      ? `web: ${submittedInput}`
+      : submittedInput;
     const formData = new FormData();
-    const newMessages = [
-      ...messages,
+    const requestMessages = [
+      ...priorMessages.map(message => ({ role: message.role, content: message.content })),
       { role: 'user', content: currentInput }
     ];
-    formData.append('messages', JSON.stringify(newMessages));
+    formData.append('messages', JSON.stringify(requestMessages));
     formData.append('models', JSON.stringify(councilModels));
     formData.append('moderatorIndex', moderatorIndex.toString());
     if (debateEnabled) formData.append('enableDebate', 'true');
     if (currentImageFile) formData.append('image', currentImageFile);
+    let finalCouncilResult = createCouncilResult(councilModels);
 
     try {
-      abortControllerRef.current = new AbortController();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       const response = await fetch('/api/council', {
         method: 'POST',
         body: formData,
-        signal: abortControllerRef.current.signal,
+        signal: controller.signal,
       });
 
+      if (!response.ok) {
+        const err = await response.json().catch(() => null);
+        throw new Error(err?.message || err?.error || `Council request failed (${response.status})`);
+      }
+
       const reader = response.body?.getReader();
-      if (!reader) return;
+      if (!reader) throw new Error('Council response did not include a readable stream');
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let finalCouncilState: { consensusText: string; individualResponses: IndividualResponse[] } | null = null;
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
+        if (activeRequestIdRef.current !== requestId) {
+          await reader.cancel();
+          return;
+        }
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split('\n\n');
@@ -357,65 +447,79 @@ export default function Chat() {
           try {
             const event: CouncilEvent = JSON.parse(line.slice(6));
             dispatchCouncilEvent(event);
-
-            // Track final state for adding to messages
-            if (event.event === 'synthesis_complete') {
-              finalCouncilState = {
-                consensusText: event.payload.fullText,
-                individualResponses: [], // will be filled from state
-              };
-            }
+            finalCouncilResult = applyCouncilEvent(finalCouncilResult, event);
           } catch {
             // Skip malformed events
           }
         }
       }
 
-      // Add council response as an assistant message
-      setCouncilState(prev => {
-        if (prev.phase === 'complete' && prev.consensusText) {
-          setMessages(msgs => [...msgs, {
-            id: Date.now().toString() + '-council',
-            role: 'assistant',
-            content: prev.consensusText,
-            councilData: prev.individualResponses,
-            councilConfidence: prev.confidence,
-          }]);
-        }
-        return { ...prev, phase: 'idle' };
-      });
+      if (activeRequestIdRef.current !== requestId) return;
+
+      if (finalCouncilResult.complete && finalCouncilResult.consensusText) {
+        setMessages(msgs => [...msgs, {
+          id: `${requestId}-council`,
+          role: 'assistant',
+          content: finalCouncilResult.consensusText,
+          councilData: finalCouncilResult.individualResponses,
+          councilConfidence: finalCouncilResult.confidence,
+        }]);
+      }
+      setCouncilState(prev => ({ ...prev, phase: 'idle' }));
 
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        setCouncilState(prev => {
-          // If we have partial data, still add it
-          if (prev.consensusText) {
+        if (activeRequestIdRef.current === requestId) {
+          if (finalCouncilResult.consensusText) {
             setMessages(msgs => [...msgs, {
-              id: Date.now().toString() + '-council',
+              id: `${requestId}-council-stopped`,
               role: 'assistant',
-              content: prev.consensusText + '\n\n*[Council deliberation was stopped]*',
-              councilData: prev.individualResponses,
+              content: finalCouncilResult.consensusText + '\n\n*[Council deliberation was stopped]*',
+              councilData: finalCouncilResult.individualResponses,
             }]);
           }
-          return { ...prev, phase: 'idle' };
-        });
-      } else {
+          setCouncilState(prev => ({ ...prev, phase: 'idle' }));
+        }
+      } else if (activeRequestIdRef.current === requestId) {
         console.error("Council error:", error);
         setCouncilState(prev => ({ ...prev, phase: 'error' }));
       }
     } finally {
-      setIsResponding(false);
-      abortControllerRef.current = null;
+      if (activeRequestIdRef.current === requestId) {
+        activeRequestIdRef.current = null;
+        abortControllerRef.current = null;
+        setIsResponding(false);
+      }
     }
-  }, [councilModels, moderatorIndex, messages, input, imageFile, setMessages, setInput, dispatchCouncilEvent, webSearchEnabled, debateEnabled]);
+  }, [councilModels, moderatorIndex, setMessages, dispatchCouncilEvent, webSearchEnabled, debateEnabled]);
 
-  // Unified submit handler
-  const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!input.trim()) return;
+  const submitCurrentInput = useCallback(async () => {
+    if (isRespondingRef.current || isTypingRef.current) return;
+    const submittedInput = inputRef.current?.value ?? input;
+    if (!submittedInput.trim()) return;
+
+    const requestId = crypto.randomUUID();
+    activeRequestIdRef.current = requestId;
+    conversationDirtyRef.current = true;
+
+    const currentImageFile = imageFile;
+    const imageUrl = imagePreview || (currentImageFile ? URL.createObjectURL(currentImageFile) : undefined);
+
+    setInput("");
+    if (inputRef.current) inputRef.current.value = "";
+    setImageFile(null);
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      role: 'user',
+      content: submittedInput,
+      image: imageUrl,
+    }]);
 
     // Create a new conversation ID if this is the first message
     if (!currentConversationId) {
@@ -425,11 +529,23 @@ export default function Chat() {
     }
 
     if (chatMode === 'council') {
-      await handleCouncilSubmit();
+      await handleCouncilSubmit(submittedInput, messages, currentImageFile, requestId);
     } else {
-      await handleSingleSubmit();
+      await handleSingleSubmit(submittedInput, messages, currentImageFile, requestId);
     }
-  }, [chatMode, handleCouncilSubmit, handleSingleSubmit, input, currentConversationId]);
+  }, [chatMode, handleCouncilSubmit, handleSingleSubmit, imageFile, imagePreview, input, messages, currentConversationId, isResponding, isTyping]);
+
+  // Unified submit handler
+  const handleSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    void submitCurrentInput();
+  }, [submitCurrentInput]);
+
+  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    void submitCurrentInput();
+  }, [submitCurrentInput]);
 
   // Model installation check
   const checkAndInstallModel = useCallback(async (modelName: string) => {
@@ -451,7 +567,12 @@ export default function Chat() {
           body: JSON.stringify({ model: modelName, installOnly: true })
         });
 
-        if (!installResponse.body) return;
+        if (!installResponse.ok) {
+          const err = await installResponse.json().catch(() => null);
+          throw new Error(err?.error || `Download failed (${installResponse.status})`);
+        }
+
+        if (!installResponse.body) throw new Error('Model download did not include progress stream');
 
         const reader = installResponse.body.getReader();
         const decoder = new TextDecoder();
@@ -484,35 +605,31 @@ export default function Chat() {
     }
   }, [chatMode, model, councilModels, checkAndInstallModel]);
 
-  const renderMessageContent = (content: string) => {
-    return content.split(/(```[\s\S]*?```|<think>[\s\S]*?<\/think>)/g).map((part, index) => {
-      if (part.startsWith("```")) {
-        const match = part.match(/```(\w+)?\n([\s\S]+?)```/);
-        return match ? (
-          <CodeBlock
-            key={index}
-            code={match[2].trim()}
-            language={match[1] || 'text'}
-          />
-        ) : part;
-      }
-      if (part.trim().startsWith("<think>")) {
-        const trimmed = part.trim();
-        const thinkContent = trimmed.slice(7, -8);
-        if(thinkContent.length == 2){
-          return null;
-        }
-        return (
-          <div key={index} className="bg-retro-surface retro-sunken p-2 italic text-retro-amber">
-            {"[Thinking] " + thinkContent}
-          </div>
-        );
-      }
-      return part.split('**').map((text, i) =>
-        i % 2 ? <strong key={`${index}-${i}`}>{text}</strong> : text
-      );
-    });
+  const renderMessageContent = (content: string, streaming = false) => {
+    const { visibleContent, reasoningContent, reasoningComplete } = splitChatContent(content);
+    const isThinkStreaming = streaming && !reasoningComplete;
+
+    return (
+      <>
+        {reasoningContent.length > 2 && (
+          <Reasoning defaultOpen={isThinkStreaming || streaming} isStreaming={isThinkStreaming}>
+            <ReasoningTrigger />
+            <ReasoningContent>{reasoningContent}</ReasoningContent>
+          </Reasoning>
+        )}
+        {visibleContent && <MarkdownMessage content={visibleContent} />}
+      </>
+    );
   };
+
+  // Derive persona state from chat activity
+  const personaState: PersonaState = isResponding
+    ? "thinking"
+    : isTyping
+      ? "speaking"
+      : input.trim().length > 0
+        ? "listening"
+        : "idle";
 
   // Council progress indicator
   const completedCount = councilState.individualResponses.filter(r => r.status === 'complete').length;
@@ -522,17 +639,17 @@ export default function Chat() {
 
     return (
       <div className="flex justify-start">
-        <div className="bg-retro-surface retro-raised p-4 max-w-[85%] border-l-4 border-retro-green">
-          <p className="text-retro-green mb-3">
+        <div className="bg-black/40 backdrop-blur-sm rounded-lg p-4 max-w-[85%] border-l-4 border-emerald-500">
+          <p className="text-emerald-400 mb-3">
             {councilState.phase === 'health_check'
-              ? '> Warming up models...'
+              ? 'Warming up models...'
               : councilState.phase === 'individual'
-                ? '> Council is deliberating...'
+                ? 'Council is deliberating...'
                 : councilState.phase === 'debating'
-                  ? '> Council is debating disagreements...'
+                  ? 'Council is debating disagreements...'
                   : councilState.phase === 'synthesizing'
-                    ? '> Synthesizing consensus...'
-                    : '> ERROR: Council encountered an error'}
+                    ? 'Synthesizing consensus...'
+                    : 'Council encountered an error'}
           </p>
 
           {/* Per-model status */}
@@ -540,24 +657,24 @@ export default function Chat() {
             {councilState.individualResponses.map((resp) => (
               <div key={resp.index} className="flex items-center gap-2">
                 <div className="w-24 shrink-0">
-                  <div className="h-2 bg-retro-border-dark overflow-hidden">
+                  <div className="h-2 bg-[#1a1a1a] rounded-full overflow-hidden">
                     <div
-                      className={`h-full transition-all duration-300 ${
-                        resp.status === 'complete' ? 'bg-retro-green'
-                          : resp.status === 'streaming' ? 'bg-retro-cyan council-pulse'
-                            : resp.status === 'error' ? 'bg-retro-red'
-                              : 'bg-retro-border'
+                      className={`h-full transition-all duration-300 rounded-full ${
+                        resp.status === 'complete' ? 'bg-emerald-500'
+                          : resp.status === 'streaming' ? 'bg-cyan-500 council-pulse'
+                            : resp.status === 'error' ? 'bg-red-500'
+                              : 'bg-[#333]'
                       }`}
                       style={{ width: resp.status === 'complete' || resp.status === 'error' ? '100%' : resp.status === 'streaming' ? '66%' : '0%' }}
                     />
                   </div>
                 </div>
-                <span className="text-retro-text">{resp.model}</span>
+                <span className="text-muted-foreground">{resp.model}</span>
                 <span className={`text-sm ${
-                  resp.status === 'complete' ? 'text-retro-green'
-                    : resp.status === 'streaming' ? 'text-retro-cyan'
-                      : resp.status === 'error' ? 'text-retro-red'
-                        : 'text-retro-border-light'
+                  resp.status === 'complete' ? 'text-emerald-400'
+                    : resp.status === 'streaming' ? 'text-cyan-400'
+                      : resp.status === 'error' ? 'text-red-400'
+                        : 'text-muted-foreground'
                 }`}>
                   [{resp.status === 'complete' ? 'OK'
                     : resp.status === 'streaming' ? 'RECV'
@@ -565,10 +682,10 @@ export default function Chat() {
                         : 'WAIT'}]
                 </span>
                 {resp.status === 'error' && resp.error && (
-                  <span className="text-retro-red text-sm">— {resp.error}</span>
+                  <span className="text-red-400 text-sm">— {resp.error}</span>
                 )}
                 {resp.status === 'error' && resp.errorAction && (
-                  <span className="text-retro-amber text-sm">→ {resp.errorAction}</span>
+                  <span className="text-orange-400 text-sm">→ {resp.errorAction}</span>
                 )}
               </div>
             ))}
@@ -576,12 +693,12 @@ export default function Chat() {
 
           {/* Synthesis progress */}
           {councilState.phase === 'synthesizing' && (
-            <div className="border-t border-retro-border pt-2">
-              <p className="text-retro-amber text-sm">
+            <div className="border-t border-border pt-2">
+              <p className="text-orange-400 text-sm">
                 Moderator ({councilState.moderatorModel}) building consensus...
               </p>
               {councilState.consensusText && (
-                <div className="mt-2 prose prose-sm text-retro-text">
+                <div className="mt-2 prose prose-sm text-foreground">
                   {renderMessageContent(councilState.consensusText)}
                 </div>
               )}
@@ -590,8 +707,8 @@ export default function Chat() {
 
           {/* Error state */}
           {councilState.phase === 'error' && (
-            <p className="text-retro-red border-t border-retro-border pt-2">
-              ERROR: Council deliberation failed. Retry.
+            <p className="text-red-400 border-t border-border pt-2">
+              Council deliberation failed. Retry.
             </p>
           )}
         </div>
@@ -600,178 +717,250 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-retro-bg text-retro-text">
-      <InstallDialog isOpen={isInstalling} message={installMessage} />
-
-      <header className="sticky top-0 bg-retro-surface retro-raised z-10">
-        <div className="retro-titlebar flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-retro-green text-lg tracking-wider">[OllaWeb v2.0]</h1>
-            <nav className="flex gap-1">
-              <span className="retro-sunken bg-retro-panel px-2 py-0.5 text-retro-green text-sm">
-                Chat
-              </span>
-              <Link
-                href="/resume"
-                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
-              >
-                Resume
-              </Link>
-              <Link
-                href="/finance"
-                className="retro-raised bg-retro-surface px-2 py-0.5 text-retro-text text-sm no-underline hover:bg-retro-panel hover:text-retro-text-bright"
-              >
-                Finance
-              </Link>
-            </nav>
+    <Meteors>
+      <div className="flex h-full text-foreground">
+        {/* Install status toast (non-blocking) */}
+        {isInstalling && (
+          <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-black/80 backdrop-blur-md border border-white/10 rounded-lg px-4 py-2 shadow-lg">
+            <p className="text-muted-foreground text-sm whitespace-pre-wrap">{installMessage}</p>
           </div>
-          <div className="flex gap-2 text-retro-text text-sm items-center">
-            <ChatHistory
-              conversations={savedConversations}
-              currentConversationId={currentConversationId}
-              isOpen={historyOpen}
-              onToggle={() => setHistoryOpen(o => !o)}
-              onSelect={handleSelectConversation}
-              onDelete={handleDeleteConversation}
-              onNewChat={handleNewChat}
-            />
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">_</span>
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">[]</span>
-            <span className="retro-raised bg-retro-surface px-1 cursor-default">X</span>
-          </div>
-        </div>
-        <div className="container mx-auto px-4 py-2 flex items-center justify-end">
-          <CouncilSelector
-            chatMode={chatMode}
-            onModeChange={setChatMode}
-            singleModel={model}
-            onSingleModelChange={setModel}
-            councilModels={councilModels}
-            onCouncilModelsChange={setCouncilModels}
-            moderatorIndex={moderatorIndex}
-            onModeratorIndexChange={setModeratorIndex}
-            debateEnabled={debateEnabled}
-            onDebateEnabledChange={setDebateEnabled}
-          />
-        </div>
-      </header>
+        )}
 
-      <main className="flex-1 overflow-auto p-4">
-        <div className="max-w-4xl mx-auto space-y-4">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              {message.role === 'assistant' && (message as any).councilData ? (
-                <CouncilResponse
-                  consensusText={message.content}
-                  individualResponses={(message as any).councilData}
-                  confidence={(message as any).councilConfidence}
-                  renderMessageContent={renderMessageContent}
-                />
-              ) : (
-                <div className={`p-3 max-w-[85%] retro-raised ${
-                  message.role === 'user'
-                    ? 'bg-retro-user-bg text-retro-cyan'
-                    : 'bg-retro-assistant-bg text-retro-text'
-                }`}>
-                  <div className="prose">
-                    {renderMessageContent(message.content)}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-
-          {/* Council progress */}
-          {renderCouncilProgress()}
-
-          {/* Single AI typing indicator — retro blinking cursor */}
-          {isTyping && chatMode === 'single' && (
-            <div className="flex justify-start">
-              <div className="bg-retro-assistant-bg retro-raised p-3">
-                <span className="text-retro-green retro-blink">█</span>
-              </div>
-            </div>
-          )}
-        </div>
-      </main>
-
-      <footer className="sticky bottom-0 bg-retro-surface retro-raised">
-        <div className="max-w-4xl mx-auto p-3">
-          {imagePreview && (
-            <div className="flex justify-center mb-2">
-              <img
-                src={imagePreview}
-                alt="Uploaded content"
-                className="w-20 h-auto retro-sunken"
-              />
-            </div>
-          )}
-          <form onSubmit={handleSubmit} className="flex items-center gap-2">
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleImageChange}
-              disabled={!hasVisionModel}
-              ref={fileInputRef}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={!hasVisionModel}
-              className={`px-3 py-1 retro-raised flex items-center justify-center ${
-                hasVisionModel
-                  ? 'bg-retro-panel text-retro-text-bright hover:bg-retro-blue active:retro-sunken'
-                  : 'bg-retro-border-dark text-retro-border cursor-not-allowed'
-              }`}
-            >
-              [IMG]
-            </button>
-            <button
-              type="button"
-              onClick={() => setWebSearchEnabled(prev => !prev)}
-              title={webSearchEnabled ? "Web search enabled — click to disable" : "Enable web search"}
-              className={`px-3 py-1 retro-raised flex items-center justify-center ${
-                webSearchEnabled
-                  ? 'bg-retro-blue text-retro-text-bright'
-                  : 'bg-retro-panel text-retro-text-bright hover:bg-retro-blue active:retro-sunken'
-              }`}
-            >
-              [WEB]
-            </button>
-            <input
-              value={input}
-              onChange={handleInputChange}
-              placeholder={chatMode === 'council' ? "> Query the council..." : "> Enter command..."}
-              className="flex-1 px-4 py-2"
-            />
-            {isResponding && chatMode === 'council' ? (
+        {/* Sidebar */}
+        {sidebarOpen ? (
+          <aside className="w-64 shrink-0 bg-black/60 backdrop-blur-md border-r border-white/10 flex flex-col">
+            <div className="flex items-center gap-2 p-3 border-b border-white/10">
+              <button
+                onClick={handleNewChat}
+                className="min-w-0 flex-1 px-3 py-2 text-sm font-medium rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
+              >
+                + New Chat
+              </button>
               <button
                 type="button"
-                onClick={() => abortControllerRef.current?.abort()}
-                className={`px-3 py-1 retro-raised flex items-center justify-center ${
-                  completedCount >= 2
-                    ? 'bg-retro-surface text-retro-amber hover:bg-retro-amber hover:text-retro-text-bright'
-                    : 'bg-retro-surface text-retro-red hover:bg-retro-red hover:text-retro-text-bright'
-                }`}
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Hide conversations"
+                title="Hide conversations"
+                className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
               >
-                {completedCount >= 2 ? '[SKIP REMAINING]' : '[ABORT]'}
+                <SidebarToggleIcon collapsed={false} />
               </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <ChatHistory
+                conversations={savedConversations}
+                currentConversationId={currentConversationId}
+                isOpen={sidebarOpen}
+                onToggle={() => setSidebarOpen(open => !open)}
+                onSelect={handleSelectConversation}
+                onDelete={handleDeleteConversation}
+                onNewChat={handleNewChat}
+              />
+            </div>
+            <div className="p-3 border-t border-white/10">
+              <nav className="flex gap-2">
+                <span className="px-3 py-1.5 text-sm font-medium rounded-md bg-white/10 text-foreground">
+                  Chat
+                </span>
+                <Link href="/finance" className="px-3 py-1.5 text-sm font-medium rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground no-underline transition-colors">
+                  Finance
+                </Link>
+                <Link href="/resume" className="px-3 py-1.5 text-sm font-medium rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground no-underline transition-colors">
+                  Resume
+                </Link>
+              </nav>
+            </div>
+          </aside>
+        ) : (
+          <aside className="w-12 shrink-0 bg-black/60 backdrop-blur-md border-r border-white/10 flex flex-col items-center">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Show conversations"
+              title="Show conversations"
+              className="mt-3 inline-flex size-9 items-center justify-center rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
+            >
+              <SidebarToggleIcon collapsed />
+            </button>
+          </aside>
+        )}
+
+        {/* Main area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <header className="shrink-0 bg-black/40 backdrop-blur-sm border-b border-white/10 z-10">
+            <div className="flex items-center justify-between px-4 py-2">
+              <h1 className="flex items-center gap-1 text-lg font-semibold tracking-normal" aria-label="voltaire">
+                <span className="text-white/35">[</span>
+                <span className="bg-gradient-to-r from-cyan-300 via-fuchsia-300 to-amber-200 bg-clip-text text-transparent drop-shadow-[0_0_16px_rgba(34,211,238,0.28)]">
+                  voltaire
+                </span>
+                <span className="text-white/35">]</span>
+              </h1>
+              <CouncilSelector
+                chatMode={chatMode}
+                onModeChange={handleModeChange}
+                singleModel={model}
+                onSingleModelChange={setModel}
+                councilModels={councilModels}
+                onCouncilModelsChange={setCouncilModels}
+                moderatorIndex={moderatorIndex}
+                onModeratorIndexChange={setModeratorIndex}
+                debateEnabled={debateEnabled}
+                onDebateEnabledChange={setDebateEnabled}
+              />
+            </div>
+          </header>
+
+          <main className="flex-1 overflow-y-auto p-4">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center gap-4">
+                <Persona state={personaState} variant="halo" className="size-24" />
+                <p className="text-muted-foreground text-sm">Ask me anything...</p>
+              </div>
             ) : (
-              <button
-                type="submit"
-                disabled={isTyping || isResponding}
-                className="px-3 py-1 retro-raised bg-retro-panel text-retro-green hover:bg-retro-blue hover:text-retro-text-bright disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
-              >
-                [SEND]
-              </button>
+              <div className="max-w-3xl mx-auto space-y-4">
+                {messages.map((message, msgIndex) => {
+                  const isLast = msgIndex === messages.length - 1;
+                  const isLastAssistant = message.role === 'assistant' && isLast;
+                  const isActivelyStreaming = isLastAssistant && isResponding;
+                  const showPersona = isLast && message.role === 'assistant';
+                  return (
+                    <div
+                      key={message.id}
+                      className={`flex w-full ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      {message.role === 'assistant' && (message as any).councilData ? (
+                        <div className="flex w-full min-w-0 items-start gap-3">
+                          <div className="size-12 shrink-0 mt-0.5">
+                            {showPersona && (
+                              <Persona state={personaState} variant="halo" className="size-full" />
+                            )}
+                          </div>
+                          <CouncilResponse
+                            consensusText={message.content}
+                            individualResponses={(message as any).councilData}
+                            confidence={(message as any).councilConfidence}
+                            renderMessageContent={renderMessageContent}
+                          />
+                        </div>
+                      ) : message.role === 'user' ? (
+                        <div className="min-w-0 max-w-[85%] rounded-xl px-4 py-3 bg-white/10 backdrop-blur-sm text-foreground">
+                          <div className="min-w-0">
+                            {renderMessageContent(message.content, isActivelyStreaming)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex w-full min-w-0 items-start gap-3">
+                          <div className="size-12 shrink-0 mt-0.5">
+                            {showPersona && (
+                              <Persona state={personaState} variant="halo" className="size-full" />
+                            )}
+                          </div>
+                          <div className="min-w-0 max-w-[85%] text-foreground">
+                            {renderMessageContent(message.content, isActivelyStreaming)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Council progress */}
+                {renderCouncilProgress()}
+
+
+              </div>
             )}
-          </form>
+          </main>
+
+          <footer className="shrink-0 border-t border-white/10 bg-black/40 backdrop-blur-sm">
+            <div className="max-w-3xl mx-auto p-3">
+              {imagePreview && (
+                <div className="flex justify-center mb-2">
+                  <img
+                    src={imagePreview}
+                    alt="Uploaded content"
+                    className="w-20 h-auto rounded-md border border-white/10"
+                  />
+                </div>
+              )}
+              <form onSubmit={handleSubmit} className="flex items-center gap-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageChange}
+                  disabled={!hasVisionModel}
+                  ref={fileInputRef}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!hasVisionModel}
+                  title={hasVisionModel ? "Upload image" : "Selected model does not support images"}
+                  aria-label="Upload image"
+                  className={`inline-flex size-9 items-center justify-center rounded-md border transition-colors ${
+                    hasVisionModel
+                      ? 'bg-white/5 border-white/10 text-foreground hover:bg-white/10'
+                      : 'bg-white/5 border-white/10 text-muted-foreground cursor-not-allowed opacity-40'
+                  }`}
+                >
+                  <ImagePlus className="size-4" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWebSearchEnabled(prev => !prev)}
+                  title={webSearchEnabled ? "Web search enabled — click to disable" : "Enable web search"}
+                  aria-pressed={webSearchEnabled}
+                  aria-label={webSearchEnabled ? "Disable web search" : "Enable web search"}
+                  className={`inline-flex size-9 items-center justify-center rounded-md border transition-colors ${
+                    webSearchEnabled
+                      ? 'bg-blue-600/20 border-blue-600/30 text-blue-400'
+                      : 'bg-white/5 border-white/10 text-foreground hover:bg-white/10'
+                  }`}
+                >
+                  <svg stroke="currentColor" width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" className="size-4" strokeWidth="1.33" aria-hidden="true">
+                    <path d="M0.665039 7.33166H13.9984M0.665039 7.33166C0.665039 11.0136 3.64981 13.9983 7.33171 13.9983M0.665039 7.33166C0.665039 3.64976 3.64981 0.664993 7.33171 0.664993M13.9984 7.33166C13.9984 11.0136 11.0136 13.9983 7.33171 13.9983M13.9984 7.33166C13.9984 3.64976 11.0136 0.664993 7.33171 0.664993M7.33171 0.664993C8.99923 2.49056 9.94687 4.85968 9.99837 7.33166C9.94687 9.80364 8.99923 12.1728 7.33171 13.9983M7.33171 0.664993C5.66419 2.49056 4.71654 4.85968 4.66504 7.33166C4.71654 9.80364 5.66419 12.1728 7.33171 13.9983" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={handleInputChange}
+                  onKeyDown={handleInputKeyDown}
+                  placeholder={chatMode === 'council' ? "Query the council..." : "Enter command..."}
+                  className="flex-1 px-4 py-2 bg-black/30 text-foreground border border-white/10 rounded-lg focus:ring-1 focus:ring-white/20 focus:outline-none placeholder:text-muted-foreground"
+                />
+                {isResponding && chatMode === 'council' ? (
+                  <button
+                    type="button"
+                    onClick={() => abortControllerRef.current?.abort()}
+                    className={`px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
+                      completedCount >= 2
+                        ? 'bg-white/5 border-white/10 text-orange-400 hover:bg-orange-600/20'
+                        : 'bg-white/5 border-white/10 text-red-400 hover:bg-red-600/20'
+                    }`}
+                  >
+                    {completedCount >= 2 ? '[SKIP]' : '[ABORT]'}
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={isTyping || isResponding}
+                    aria-label="Send message"
+                    title="Send message"
+                    className="inline-flex size-9 items-center justify-center rounded-md bg-white/10 border border-white/10 text-foreground hover:bg-white/15 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="size-4" aria-hidden="true">
+                      <path d="M8 13.3333V2.66667M8 2.66667L4 6.66667M8 2.66667L12 6.66667" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.33" />
+                    </svg>
+                  </button>
+                )}
+              </form>
+            </div>
+          </footer>
         </div>
-      </footer>
-    </div>
+      </div>
+    </Meteors>
   );
 }

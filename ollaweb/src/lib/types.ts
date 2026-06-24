@@ -26,6 +26,7 @@ export interface IndividualResponse {
   index: number;
   text: string;
   status: 'pending' | 'streaming' | 'complete' | 'error';
+  reasoning?: string;
   error?: string;
   errorAction?: string;
 }
@@ -34,6 +35,7 @@ export interface CouncilState {
   phase: 'idle' | 'health_check' | 'individual' | 'debating' | 'synthesizing' | 'complete' | 'error';
   individualResponses: IndividualResponse[];
   consensusText: string;
+  consensusReasoning?: string;
   moderatorModel: string;
   confidence?: ConfidenceLevel;
 }
@@ -47,6 +49,7 @@ export type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string;
   councilData?: IndividualResponse[];
   councilConfidence?: ConfidenceLevel;
   image?: string;
@@ -65,12 +68,9 @@ export interface Conversation {
 }
 
 export const AVAILABLE_MODELS = [
-  { value: 'llama3.2', label: 'Llama 3.2 (2B|2GB) 💬', vision: false },
-  { value: 'mistral', label: 'Mistral (7B|4.1GB) 💬', vision: false },
-  { value: 'deepseek-r1:7b', label: 'Deepseek-R1 7B (7B|4.7GB) 💬', vision: false },
-  { value: 'phi4-mini-reasoning:latest', label: 'Phi-4 Mini Reasoning (3.8B|2.2GB) 💬', vision: false },
-  { value: 'qwen3-vl:4b', label: 'Qwen3-VL (4B|2.5GB) 💬👁️', vision: true },
-  { value: 'gpt-oss:20b', label: 'GPT-OSS (20B|12GB) 💬', vision: false },
+  { value: 'minimax-m2.7:cloud', label: 'MiniMax M2.7 Cloud ☁️', vision: false },
+  { value: 'gemma4:31b-cloud', label: 'Gemma 4 31B Cloud ☁️', vision: false },
+  { value: 'kimi-k2.5:cloud', label: 'Kimi K2.5 Cloud ☁️', vision: false },
 ] as const;
 
 // ── Finance Types ─────────────────────────────────────────────────
@@ -252,7 +252,7 @@ export interface ComparisonTicker {
 export const COMPARISON_COLORS = ['#00d4ff', '#ffb000', '#ff3333', '#a855f7'] as const;
 
 export const DEFAULT_COUNCIL_MODELS: [string, string, string] = [
-  'llama3.2',
-  'mistral',
-  'deepseek-r1:7b',
+  'minimax-m2.7:cloud',
+  'gemma4:31b-cloud',
+  'kimi-k2.5:cloud',
 ];

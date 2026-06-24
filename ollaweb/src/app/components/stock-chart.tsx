@@ -36,24 +36,34 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
         width: containerRef.current.clientWidth,
         height: containerRef.current.clientHeight,
         layout: {
-          background: { color: '#1a1a2e' } as any,
-          textColor: '#c0c0c0',
-          fontFamily: "'VT323', 'Courier New', monospace",
+          background: { color: 'transparent' } as any,
+          textColor: '#9ca3af',
+          fontFamily: "var(--font-inter), sans-serif",
         },
         grid: {
-          vertLines: { color: '#2a2a4e' },
-          horzLines: { color: '#2a2a4e' },
+          vertLines: { color: '#1f1f1f' },
+          horzLines: { color: '#1f1f1f' },
         },
         crosshair: {
-          vertLine: { color: '#00d4ff', labelBackgroundColor: '#0f3460' },
-          horzLine: { color: '#00d4ff', labelBackgroundColor: '#0f3460' },
+          vertLine: { 
+            color: '#ffffff', 
+            labelBackgroundColor: '#333333',
+            width: 1,
+            style: lc.LineStyle.SparseDotted,
+          },
+          horzLine: { 
+            color: '#ffffff', 
+            labelBackgroundColor: '#333333',
+            width: 1,
+            style: lc.LineStyle.SparseDotted,
+          },
         },
         timeScale: {
-          borderColor: '#3a3a5c',
+          borderColor: '#333333',
           timeVisible: isIntraday,
         },
         rightPriceScale: {
-          borderColor: '#3a3a5c',
+          borderColor: '#333333',
         },
       });
 

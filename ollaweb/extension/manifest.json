@@ -1,10 +1,10 @@
 ﻿{
   "manifest_version": 3,
-  "name": "OllaWeb Tailor",
+  "name": "Voltaire Tailor",
   "version": "0.1.0",
-  "description": "Send a job posting to OllaWeb and auto-tailor your resume.",
+  "description": "Send a job posting to Voltaire and auto-tailor your resume.",
   "action": {
-    "default_title": "Tailor with OllaWeb",
+    "default_title": "Tailor with Voltaire",
     "default_popup": "popup.html"
   },
   "permissions": ["activeTab", "scripting"],

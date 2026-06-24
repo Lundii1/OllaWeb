@@ -83,7 +83,12 @@ export async function checkModelInstalled(modelName: string): Promise<boolean> {
     const lines = stdout.split('\n').slice(1);
     const fullModelName = modelName + ':latest';
 
-    return lines.some(line => line.trim().startsWith(modelName) || line.trim().startsWith(fullModelName));
+    const listed = lines.some(line => line.trim().startsWith(modelName) || line.trim().startsWith(fullModelName));
+    if (listed) return true;
+
+    // Not in ollama list — could be a cloud/provider model.
+    // Try pinging it directly; if it responds, it's available.
+    return await pingModel(modelName);
   } catch (error) {
     console.error('Error checking model:', error);
     return false;

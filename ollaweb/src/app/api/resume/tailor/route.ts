@@ -11,7 +11,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Both latex and jobPosting are required' }, { status: 400 });
     }
 
-    const selectedModel = model || 'gpt-oss:20b';
+    const selectedModel = model || 'gemma4:e4b';
 
     const stream = new ReadableStream({
       async start(controller) {

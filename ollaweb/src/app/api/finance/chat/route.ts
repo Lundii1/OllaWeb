@@ -132,7 +132,7 @@ export async function POST(req: Request) {
   try {
     const formData = await req.formData();
     const messages = JSON.parse(formData.get('messages') as string);
-    const model = (formData.get('model') as string) || 'llama3.2';
+    const model = (formData.get('model') as string) || 'gemma4:e4b';
     const ticker = (formData.get('ticker') as string) || '';
     const financialDataRaw = formData.get('financialData') as string;
 

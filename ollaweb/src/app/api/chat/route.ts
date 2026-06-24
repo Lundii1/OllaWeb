@@ -8,6 +8,16 @@ import {
   runWebSearch,
 } from '../../../lib/ollama-utils';
 
+function stripReasoningBlocks(text: string): string {
+  return text
+    .replace(/《think》/gi, '<think>')
+    .replace(/《\/think》/gi, '</think>')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*$/gi, '')
+    .replace(/<\/think>/gi, '')
+    .trimStart();
+}
+
 export async function POST(req: Request) {
   await ensureOllamaRunning();
 
@@ -41,7 +51,7 @@ export async function POST(req: Request) {
   try {
     const formData = await req.formData();
     const messages = JSON.parse(formData.get('messages') as string);
-    const model = formData.get('model') as string || 'llama3.2';
+    const model = formData.get('model') as string || 'gemma4:e4b';
     const image = formData.get('image') as File;
 
     // Model installation check
@@ -56,18 +66,13 @@ export async function POST(req: Request) {
 
     // Detect optional web search command on the latest user message
     const last = messages[messages.length - 1];
-    console.log('[DEBUG] Last message:', JSON.stringify(last));
-    console.log('[DEBUG] Content type:', typeof last?.content);
     let webContextSystemMessage: any | null = null;
     if (last?.role === 'user' && typeof last.content === 'string') {
       const match = last.content.trim().match(/^web:\s*(.+)$/i);
-      console.log('[DEBUG] Web prefix match:', match ? 'YES' : 'NO', 'Content:', last.content.substring(0, 80));
       if (match && match[1]) {
         const searchQuery = match[1].trim();
-        console.log('[DEBUG] Running web search for:', searchQuery);
         try {
           const search = await runWebSearch(searchQuery);
-          console.log('[DEBUG] Search result:', search.answer ? 'Got answer' : 'No answer', 'Results:', search.results?.length);
           const lines: string[] = [];
           if (search.answer) {
             lines.push(`Answer: ${search.answer}`);
@@ -116,15 +121,35 @@ export async function POST(req: Request) {
         ]
       };
     });
+    const systemPrompt = [
+      'Provide a direct, useful answer. Do not include hidden reasoning or <think> tags.',
+      webContextSystemMessage?.content,
+    ].filter(Boolean).join('\n\n');
 
-    // Generate response
-    const result = await streamText({
-      model: ollama(model),
-      messages: processedMessages,
-      ...(webContextSystemMessage ? { system: webContextSystemMessage.content } : {}),
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        try {
+          const result = await streamText({
+            model: ollama(model),
+            messages: processedMessages,
+            ...(systemPrompt ? { system: systemPrompt } : {}),
+          });
+
+          for await (const chunk of result.textStream) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+
+          controller.close();
+        } catch (err) {
+          controller.error(err);
+        }
+      },
     });
 
-    return result.toTextStreamResponse();
+    return new Response(stream, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
 
   } catch (error) {
     console.error('API Error:', error);

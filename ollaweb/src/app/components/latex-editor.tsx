@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { latex } from 'codemirror-lang-latex';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -16,6 +16,7 @@ interface LaTeXEditorProps {
 export function LaTeXEditor({ value, onChange, readOnly = false }: LaTeXEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const readOnlyCompartmentRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -39,22 +40,40 @@ export function LaTeXEditor({ value, onChange, readOnly = false }: LaTeXEditorPr
         EditorView.theme({
           '&': {
             height: '100%',
-            fontSize: '14px',
+            fontSize: '13px',
+            backgroundColor: 'transparent !important',
           },
           '.cm-scroller': {
-            fontFamily: '"Courier New", monospace',
+            fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+            scrollbarWidth: 'thin',
+            scrollbarColor: '#333 transparent',
+          },
+          '.cm-gutters': {
+            backgroundColor: 'transparent !important',
+            borderRight: '1px solid #333 !important',
+            color: '#666',
+            minWidth: '40px',
+            textAlign: 'right',
+          },
+          '.cm-activeLine': {
+            backgroundColor: 'rgba(255, 255, 255, 0.03) !important',
+          },
+          '.cm-activeLineGutter': {
+            backgroundColor: 'rgba(255, 255, 255, 0.03) !important',
+            color: '#fff',
           },
           '.cm-content': {
-            caretColor: '#39ff14',
+            caretColor: '#fff',
+            padding: '10px 0',
           },
           '.cm-cursor': {
-            borderLeftColor: '#39ff14',
+            borderLeftColor: '#fff',
           },
           '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-            backgroundColor: '#0f3460 !important',
+            backgroundColor: 'rgba(255, 255, 255, 0.1) !important',
           },
         }),
-        ...(readOnly ? [EditorState.readOnly.of(true)] : []),
+        readOnlyCompartmentRef.current.of(EditorState.readOnly.of(readOnly)),
       ],
     });
 
@@ -72,6 +91,15 @@ export function LaTeXEditor({ value, onChange, readOnly = false }: LaTeXEditorPr
     // Only create editor once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    view.dispatch({
+      effects: readOnlyCompartmentRef.current.reconfigure(EditorState.readOnly.of(readOnly)),
+    });
+  }, [readOnly]);
 
   // Sync external value changes (e.g. from streaming)
   useEffect(() => {
@@ -93,7 +121,7 @@ export function LaTeXEditor({ value, onChange, readOnly = false }: LaTeXEditorPr
   return (
     <div
       ref={containerRef}
-      className="retro-sunken overflow-auto h-full"
+      className="bg-[#0f0f0f] border border-[#333] rounded-xl overflow-hidden h-full shadow-inner"
     />
   );
 }
