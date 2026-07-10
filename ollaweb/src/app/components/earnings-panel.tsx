@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect } from 'react';
 import { 
   Calendar, 
   History, 
@@ -11,8 +10,13 @@ import {
 } from 'lucide-react';
 import type { EarningsData } from '../../lib/types';
 
-interface EarningsPanelProps {
+export type EarningsPanelData = EarningsData;
+
+export interface EarningsPanelProps {
   ticker: string;
+  data?: EarningsData | null;
+  loading?: boolean;
+  error?: string | null;
 }
 
 function daysUntil(dateStr: string): number {
@@ -21,49 +25,34 @@ function daysUntil(dateStr: string): number {
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export function EarningsPanel({ ticker }: EarningsPanelProps) {
-  const [data, setData] = useState<EarningsData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!ticker) return;
-    setLoading(true);
-    setError(null);
-    fetch(`/api/finance/earnings?ticker=${encodeURIComponent(ticker)}`)
-      .then(async res => {
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || 'Failed to fetch');
-        setData(json);
-      })
-      .catch(err => {
-        setError(err.message);
-        setData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [ticker]);
+export function EarningsPanel({
+  ticker,
+  data = null,
+  loading = false,
+  error = null,
+}: EarningsPanelProps) {
 
   if (!ticker) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-8 text-center opacity-30 gap-4">
          <Calendar size={32} />
-         <p className="text-[10px] font-bold uppercase tracking-[0.2em]">Select ticker to view earnings</p>
+         <p className="text-sm">Select a ticker to view earnings</p>
       </div>
     );
   }
 
   if (loading) {
     return (
-      <div className="h-48 flex flex-col items-center justify-center gap-3">
+      <div role="status" aria-live="polite" className="h-48 flex flex-col items-center justify-center gap-3">
         <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-        <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Loading Earnings...</span>
+        <span className="text-sm text-muted-foreground">Loading earnings…</span>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs font-medium">
+      <div role="alert" className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs font-medium">
         Error: {error}
       </div>
     );

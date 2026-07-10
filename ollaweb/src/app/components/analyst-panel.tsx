@@ -1,12 +1,7 @@
 "use client";
 
-import { useState, useEffect } from 'react';
 import type { AnalystData } from '../../lib/types';
-
-interface AnalystPanelProps {
-  ticker: string;
-}
-
+import { formatCurrency } from '../../lib/finance-utils';
 
 import { 
   Users, 
@@ -17,53 +12,45 @@ import {
   ChevronRight
 } from 'lucide-react';
 
-interface AnalystPanelProps {
+export type AnalystPanelData = AnalystData;
+
+export interface AnalystPanelProps {
   ticker: string;
+  data?: AnalystData | null;
+  loading?: boolean;
+  error?: string | null;
+  currency?: string | null;
 }
 
-export function AnalystPanel({ ticker }: AnalystPanelProps) {
-  const [data, setData] = useState<AnalystData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!ticker) return;
-    setLoading(true);
-    setError(null);
-    fetch(`/api/finance/analysis?ticker=${encodeURIComponent(ticker)}`)
-      .then(async res => {
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || 'Failed to fetch');
-        setData(json);
-      })
-      .catch(err => {
-        setError(err.message);
-        setData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [ticker]);
+export function AnalystPanel({
+  ticker,
+  data = null,
+  loading = false,
+  error = null,
+  currency = 'USD',
+}: AnalystPanelProps) {
 
   if (!ticker) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-8 text-center opacity-30 gap-4">
          <Users size={32} />
-         <p className="text-[10px] font-bold uppercase tracking-[0.2em]">Select ticker for analyst coverage</p>
+         <p className="text-sm">Select a ticker for analyst coverage</p>
       </div>
     );
   }
 
   if (loading) {
     return (
-      <div className="h-48 flex flex-col items-center justify-center gap-3">
+      <div role="status" aria-live="polite" className="h-48 flex flex-col items-center justify-center gap-3">
         <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-        <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Polling Analysts...</span>
+        <span className="text-sm text-muted-foreground">Loading analyst coverage…</span>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs font-medium">
+      <div role="alert" className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs font-medium">
         Error: {error}
       </div>
     );
@@ -76,6 +63,17 @@ export function AnalystPanel({ ticker }: AnalystPanelProps) {
   const total = currentRec
     ? currentRec.strongBuy + currentRec.buy + currentRec.hold + currentRec.sell + currentRec.strongSell
     : 0;
+  const hasTargetRange = data.targetLow != null
+    && data.targetHigh != null
+    && data.targetHigh > data.targetLow;
+  const targetPosition = (value: number | null) => {
+    if (!hasTargetRange || value == null || data.targetLow == null || data.targetHigh == null) return null;
+    const normalized = ((value - data.targetLow) / (data.targetHigh - data.targetLow)) * 80 + 10;
+    return Math.min(90, Math.max(10, normalized));
+  };
+  const meanPosition = targetPosition(data.targetMean);
+  const currentPosition = targetPosition(data.currentPrice);
+  const formatTarget = (value: number | null) => formatCurrency(value, currency);
 
   return (
     <div className="flex flex-col gap-6 py-2 pb-6">
@@ -127,7 +125,7 @@ export function AnalystPanel({ ticker }: AnalystPanelProps) {
              )}
              
              <div className="relative h-2 bg-white/5 rounded-full mx-2 border border-white/5">
-                {data.targetLow != null && data.targetHigh != null && data.currentPrice != null && (
+                {hasTargetRange && currentPosition != null && (
                   <>
                     {/* Range fill */}
                     <div className="absolute top-0 bottom-0 bg-blue-500/20 rounded-full" style={{
@@ -136,23 +134,23 @@ export function AnalystPanel({ ticker }: AnalystPanelProps) {
                     }} />
                     
                     {/* Markers */}
-                    {data.targetMean != null && (
+                    {meanPosition != null && (
                       <div className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full border-4 border-blue-600 shadow-lg z-10" style={{
-                         left: `${((data.targetMean - data.targetLow) / (data.targetHigh - data.targetLow)) * 80 + 10}%`
+                         left: `${meanPosition}%`
                       }} />
                     )}
                     
                     <div className="absolute top-1/2 -translate-y-1/2 w-1.5 h-6 bg-red-500 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.5)] z-20" style={{
-                       left: `${((data.currentPrice - data.targetLow) / (data.targetHigh - data.targetLow)) * 80 + 10}%`
+                       left: `${currentPosition}%`
                     }} />
                   </>
                 )}
              </div>
 
              <div className="grid grid-cols-3 gap-4 pt-2">
-                <MetricBox label="Low" value={`$${data.targetLow?.toFixed(0)}`} color="text-red-400" />
-                <MetricBox label="Mean" value={`$${data.targetMean?.toFixed(0)}`} color="text-white" />
-                <MetricBox label="High" value={`$${data.targetHigh?.toFixed(0)}`} color="text-green-400" />
+                <MetricBox label="Low" value={formatTarget(data.targetLow)} color="text-red-400" />
+                <MetricBox label="Mean" value={formatTarget(data.targetMean)} color="text-white" />
+                <MetricBox label="High" value={formatTarget(data.targetHigh)} color="text-green-400" />
              </div>
           </div>
         </div>

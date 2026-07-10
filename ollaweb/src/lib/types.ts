@@ -68,9 +68,9 @@ export interface Conversation {
 }
 
 export const AVAILABLE_MODELS = [
-  { value: 'minimax-m2.7:cloud', label: 'MiniMax M2.7 Cloud ☁️', vision: false },
+  { value: 'nemotron-3-super:cloud', label: 'Nemotron 3 Super Cloud ☁️', vision: false },
   { value: 'gemma4:31b-cloud', label: 'Gemma 4 31B Cloud ☁️', vision: false },
-  { value: 'kimi-k2.5:cloud', label: 'Kimi K2.5 Cloud ☁️', vision: false },
+  { value: 'minimax-m3:cloud', label: 'Minimax M3 Cloud ☁️', vision: false },
 ] as const;
 
 // ── Finance Types ─────────────────────────────────────────────────
@@ -252,7 +252,7 @@ export interface ComparisonTicker {
 export const COMPARISON_COLORS = ['#00d4ff', '#ffb000', '#ff3333', '#a855f7'] as const;
 
 export const DEFAULT_COUNCIL_MODELS: [string, string, string] = [
-  'minimax-m2.7:cloud',
+  'nemotron-3-super:cloud',
   'gemma4:31b-cloud',
-  'kimi-k2.5:cloud',
+  'minimax-m3:cloud',
 ];

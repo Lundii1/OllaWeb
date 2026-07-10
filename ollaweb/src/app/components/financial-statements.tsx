@@ -1,187 +1,170 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { BarChart4, AlertCircle } from 'lucide-react';
-import type { FinancialStatementsData, StatementType, StatementPeriodType } from '../../lib/types';
+import { AlertCircle, BarChart4, Loader2 } from "lucide-react";
+import type {
+  FinancialStatementsData,
+  StatementPeriodType,
+  StatementType,
+} from "../../lib/types";
 
-interface FinancialStatementsProps {
+export type FinancialStatementsPanelData = FinancialStatementsData;
+
+export interface FinancialStatementsProps {
   ticker: string;
+  data?: FinancialStatementsData | null;
+  loading?: boolean;
+  error?: string | null;
+  statementType: StatementType;
+  periodType: StatementPeriodType;
+  onStatementTypeChange: (statement: StatementType) => void;
+  onPeriodTypeChange: (period: StatementPeriodType) => void;
 }
 
-const TABS: { key: StatementType; label: string }[] = [
-  { key: 'income', label: 'Income' },
-  { key: 'balance', label: 'Balance' },
-  { key: 'cashflow', label: 'Cash Flow' },
+const STATEMENTS: { key: StatementType; label: string }[] = [
+  { key: "income", label: "Income" },
+  { key: "balance", label: "Balance sheet" },
+  { key: "cashflow", label: "Cash flow" },
 ];
 
-function formatValue(v: number | null): string {
-  if (v == null) return '—';
-  const abs = Math.abs(v);
-  const sign = v < 0 ? '-' : '';
-  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}$${abs.toFixed(2)}`;
+const PERIODS: { key: StatementPeriodType; label: string }[] = [
+  { key: "annual", label: "Annual" },
+  { key: "quarterly", label: "Quarterly" },
+];
+
+const HIGHLIGHT_ROWS = new Set([
+  "Gross Profit",
+  "Operating Income",
+  "Net Income",
+  "EBITDA",
+  "Total Assets",
+  "Stockholders' Equity",
+  "Free Cash Flow",
+  "Operating Cash Flow",
+  "Total Revenue",
+  "Diluted EPS",
+]);
+
+function formatValue(value: number | null): string {
+  if (value == null) return "—";
+  const absolute = Math.abs(value);
+  const sign = value < 0 ? "−" : "";
+  if (absolute >= 1e12) return `${sign}$${(absolute / 1e12).toFixed(2)}T`;
+  if (absolute >= 1e9) return `${sign}$${(absolute / 1e9).toFixed(2)}B`;
+  if (absolute >= 1e6) return `${sign}$${(absolute / 1e6).toFixed(2)}M`;
+  if (absolute >= 1e3) return `${sign}$${(absolute / 1e3).toFixed(1)}K`;
+  return `${sign}$${absolute.toFixed(2)}`;
 }
 
-
-export function FinancialStatements({ ticker }: FinancialStatementsProps) {
-  const [statementType, setStatementType] = useState<StatementType>('income');
-  const [periodType, setPeriodType] = useState<StatementPeriodType>('annual');
-  const [data, setData] = useState<FinancialStatementsData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(async () => {
-    if (!ticker) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/finance/fundamentals?ticker=${encodeURIComponent(ticker)}&statement=${statementType}&periodType=${periodType}`
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.error || 'Failed to load data');
-        setData(null);
-        return;
-      }
-      setData(json);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Network error');
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [ticker, statementType, periodType]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
+export function FinancialStatements({
+  ticker,
+  data = null,
+  loading = false,
+  error = null,
+  statementType,
+  periodType,
+  onStatementTypeChange,
+  onPeriodTypeChange,
+}: FinancialStatementsProps) {
   if (!ticker) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4 opacity-30">
-        <BarChart4 size={48} />
-        <p className="text-xs font-bold uppercase tracking-widest">Select an asset to view fundamentals</p>
+      <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+        <BarChart4 className="size-8" aria-hidden="true" />
+        <p className="text-sm">Select a ticker to view fundamentals.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0a0a]/30">
-      {/* Search/Filter Bar */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[#333] shrink-0 bg-[#0a0a0a]/50 backdrop-blur-sm sticky top-0 z-20">
-        <div className="flex items-center gap-1 bg-[#171717]/50 rounded-xl p-1 border border-[#333]">
-          {TABS.map(tab => (
+    <div className="relative min-h-48 overflow-hidden rounded-lg border border-white/10 bg-black/20">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-3">
+        <div className="flex items-center gap-1 overflow-x-auto" aria-label="Financial statement">
+          {STATEMENTS.map((statement) => (
             <button
-              key={tab.key}
-              onClick={() => setStatementType(tab.key)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
-                statementType === tab.key
-                  ? 'bg-[#2f2f2f] text-white shadow-sm ring-1 ring-white/5'
-                  : 'text-muted-foreground hover:text-white hover:bg-white/5'
-              }`}
+              key={statement.key}
+              type="button"
+              aria-pressed={statementType === statement.key}
+              onClick={() => onStatementTypeChange(statement.key)}
+              className={`shrink-0 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${statementType === statement.key ? "bg-white/10 text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
             >
-              {tab.label}
+              {statement.label}
             </button>
           ))}
         </div>
-
-        <div className="flex items-center gap-1 bg-[#171717]/50 rounded-xl p-1 border border-[#333]">
-          {[
-            { key: 'annual' as const, label: 'Annual' },
-            { key: 'quarterly' as const, label: 'Quarterly' }
-          ].map(p => (
+        <div className="flex items-center gap-1" aria-label="Statement period">
+          {PERIODS.map((statementPeriod) => (
             <button
-              key={p.key}
-              onClick={() => setPeriodType(p.key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                periodType === p.key
-                  ? 'bg-white/10 text-white'
-                  : 'text-muted-foreground hover:text-white'
-              }`}
+              key={statementPeriod.key}
+              type="button"
+              aria-pressed={periodType === statementPeriod.key}
+              onClick={() => onPeriodTypeChange(statementPeriod.key)}
+              className={`rounded-md px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${periodType === statementPeriod.key ? "bg-white/10 text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
             >
-              {p.label}
+              {statementPeriod.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto custom-scrollbar relative">
-        {loading && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0a0a]/50 backdrop-blur-[2px] z-30">
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-              <span className="text-[10px] font-bold uppercase tracking-[0.2em] animate-pulse">Aggregating Financials...</span>
-            </div>
+      {loading && (
+        <div role="status" aria-live="polite" className="absolute inset-x-0 bottom-0 top-[57px] z-20 flex items-center justify-center bg-black/55 backdrop-blur-[2px]">
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/60 px-3 py-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            Loading fundamentals…
           </div>
-        )}
-        
-        {error && (
-          <div className="flex items-center justify-center p-8 h-full">
-            <div className="max-w-md bg-red-500/10 border border-red-500/20 text-red-400 p-6 rounded-2xl flex items-center gap-4">
-              <AlertCircle size={24} />
-              <div>
-                <p className="text-sm font-bold">Data Fetching Failed</p>
-                <p className="text-xs opacity-80">{error}</p>
-              </div>
-            </div>
-          </div>
-        )}
+        </div>
+      )}
 
-        {data && !loading && (
-          <div className="min-w-full inline-block align-middle">
-            <table className="w-full border-separate border-spacing-0">
-              <thead>
-                <tr className="bg-[#171717]/30">
-                  <th className="text-left text-[10px] uppercase tracking-[0.2em] font-bold text-muted-foreground px-6 py-4 sticky left-0 bg-[#0a0a0a] border-b border-[#333] z-10">Financial Item</th>
-                  {data.periods.map((p, i) => (
-                    <th key={i} className="text-right text-[10px] uppercase tracking-[0.1em] font-bold text-muted-foreground px-4 py-4 border-b border-[#333] whitespace-nowrap">
-                      {p}
+      {error && !loading && (
+        <div role="alert" className="m-4 flex items-start gap-3 rounded-lg border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-300">
+          <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <div>
+            <p className="font-medium">Financial data could not be loaded</p>
+            <p className="mt-1 text-red-200/80">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {!data && !loading && !error && (
+        <div className="flex min-h-40 items-center justify-center p-6 text-sm text-muted-foreground">
+          No statement data was returned.
+        </div>
+      )}
+
+      {data && !error && (
+        <div className="overflow-auto">
+          <table className="w-full min-w-[680px] border-separate border-spacing-0 text-sm">
+            <thead>
+              <tr>
+                <th scope="col" className="sticky left-0 top-0 z-10 border-b border-r border-white/10 bg-neutral-950/95 px-4 py-3 text-left text-xs font-medium text-muted-foreground backdrop-blur-sm">
+                  Financial item
+                </th>
+                {data.periods.map((item) => (
+                  <th key={item} scope="col" className="sticky top-0 border-b border-white/10 bg-neutral-950/95 px-4 py-3 text-right text-xs font-medium text-muted-foreground backdrop-blur-sm">
+                    {item}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((row) => {
+                const highlighted = HIGHLIGHT_ROWS.has(row.label);
+                return (
+                  <tr key={row.key} className="group hover:bg-white/[0.03]">
+                    <th scope="row" className={`sticky left-0 border-b border-r border-white/[0.06] px-4 py-3 text-left backdrop-blur-sm ${highlighted ? "bg-neutral-900/95 font-medium text-foreground" : "bg-neutral-950/95 font-normal text-muted-foreground group-hover:text-foreground"}`}>
+                      {row.label}
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#1f1f1f]">
-                {data.rows.map((row, i) => {
-                  const isHighlight = ['Gross Profit', 'Operating Income', 'Net Income', 'EBITDA',
-                    'Total Assets', "Stockholders' Equity", 'Free Cash Flow', 'Operating Cash Flow',
-                    'Total Revenue', 'Diluted EPS'].includes(row.label);
-                  return (
-                    <tr
-                      key={row.key}
-                      className={`group hover:bg-white/[0.02] transition-colors ${
-                        isHighlight ? 'bg-white/[0.01]' : ''
-                      }`}
-                    >
-                      <td className={`text-left px-6 py-3 sticky left-0 z-10 border-r border-[#1f1f1f] ${
-                        isHighlight 
-                          ? 'bg-[#111] text-white font-bold text-sm' 
-                          : 'bg-[#0a0a0a] text-muted-foreground text-xs group-hover:text-foreground transition-colors'
-                      }`}>
-                        {row.label}
+                    {row.values.map((value, index) => (
+                      <td key={`${row.key}-${data.periods[index] ?? index}`} className={`border-b border-white/[0.06] px-4 py-3 text-right font-mono text-xs tabular-nums ${value != null && value < 0 ? "text-red-300" : "text-foreground/85"} ${highlighted ? "font-semibold" : ""}`}>
+                        {formatValue(value)}
                       </td>
-                      {row.values.map((v, j) => (
-                        <td
-                          key={j}
-                          className={`text-right px-4 py-3 font-mono text-xs tabular-nums ${
-                            v != null && v < 0 ? 'text-red-400' : 'text-gray-300'
-                          } ${isHighlight ? 'font-bold' : ''}`}
-                        >
-                          {formatValue(v)}
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -62,6 +62,12 @@ export function Meteors({
             opacity: 0;
           }
         }
+        @media (prefers-reduced-motion: reduce) {
+          .meteor-motion {
+            display: none;
+            animation: none !important;
+          }
+        }
       `}</style>
 
       {/* Subtle gradient overlay */}
@@ -79,7 +85,7 @@ export function Meteors({
       {meteors.map(meteor => (
         <span
           key={meteor.id}
-          className="absolute h-0.5 w-0.5 rounded-full"
+          className="meteor-motion absolute h-0.5 w-0.5 rounded-full"
           style={{
             top: "-40px",
             left: `${meteor.left}%`,

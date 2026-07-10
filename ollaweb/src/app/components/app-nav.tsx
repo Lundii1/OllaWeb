@@ -2,32 +2,46 @@ import Link from "next/link";
 
 export type NavPage = "chat" | "resume" | "finance";
 
-interface AppNavProps {
+export interface AppNavProps {
   current: NavPage;
+  className?: string;
 }
 
 const pages: { key: NavPage; label: string; href: string }[] = [
   { key: "chat", label: "Chat", href: "/" },
-  { key: "resume", label: "Resume", href: "/resume" },
   { key: "finance", label: "Finance", href: "/finance" },
+  { key: "resume", label: "Resume", href: "/resume" },
 ];
 
-export function AppNav({ current }: AppNavProps) {
+export function AppNav({ current, className }: AppNavProps) {
   return (
-    <div className="flex items-center gap-1">
-      {pages.map((p) => (
-        <Link
-          key={p.key}
-          href={p.href}
-          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            p.key === current
-              ? "bg-[#2f2f2f] text-foreground"
-              : "text-muted-foreground hover:bg-[#2f2f2f] hover:text-foreground"
-          }`}
-        >
-          {p.label}
-        </Link>
-      ))}
-    </div>
+    <nav aria-label="Primary" className={`flex items-center gap-1 ${className ?? ""}`}>
+      {pages.map((p) => {
+        const itemClassName =
+          "rounded-md px-3 py-1.5 text-sm font-medium no-underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30";
+
+        if (p.key === current) {
+          return (
+            <span
+              key={p.key}
+              aria-current="page"
+              className={`${itemClassName} bg-white/10 text-foreground`}
+            >
+              {p.label}
+            </span>
+          );
+        }
+
+        return (
+          <Link
+            key={p.key}
+            href={p.href}
+            className={`${itemClassName} text-muted-foreground hover:bg-white/5 hover:text-foreground`}
+          >
+            {p.label}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

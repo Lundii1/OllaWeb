@@ -2,43 +2,111 @@ diff --git a/node_modules/ollama-ai-provider/dist/index.js b/node_modules/ollama
 index 5023072..bc82367 100644
 --- a/node_modules/ollama-ai-provider/dist/index.js
 +++ b/node_modules/ollama-ai-provider/dist/index.js
-@@ -660,7 +660,7 @@ var ollamaChatResponseSchema = import_zod2.z.object({
-   done: import_zod2.z.literal(true),
-   done_reason: import_zod2.z.string().optional().nullable(),
-   eval_count: import_zod2.z.number(),
--  eval_duration: import_zod2.z.number(),
-+  eval_duration: import_zod2.z.number().optional(),
-   load_duration: import_zod2.z.number().optional(),
+@@ -600,6 +600,7 @@ var OllamaChatLanguageModel = class {
+       tools,
+       type
+     });
++    let isInThinking = false;
+     let finishReason = "other";
+     let usage = {
+       completionTokens: Number.NaN,
+@@ -642,11 +643,20 @@ var OllamaChatLanguageModel = class {
+                 return;
+               }
+             }
+-            if (value.message.content !== null) {
+-              controller.enqueue({
+-                textDelta: value.message.content,
+-                type: "text-delta"
+-              });
++            if (value.message.thinking) {
++              if (!isInThinking) {
++                isInThinking = true;
++                controller.enqueue({ textDelta: "<think>", type: "text-delta" });
++              }
++              controller.enqueue({ textDelta: value.message.thinking, type: "text-delta" });
++            } else {
++              if (isInThinking) {
++                isInThinking = false;
++                controller.enqueue({ textDelta: "《/think》", type: "text-delta" });
++              }
++              if (value.message.content) {
++                controller.enqueue({ textDelta: value.message.content, type: "text-delta" });
++              }
+             }
+           }
+         })
+@@ -663,6 +673,7 @@ var ollamaChatResponseSchema = import_zod2.z.object({
    message: import_zod2.z.object({
      content: import_zod2.z.string(),
-@@ -694,7 +694,7 @@ var ollamaChatStreamChunkSchema = import_zod2.z.discriminatedUnion("done", [
-     created_at: import_zod2.z.string(),
-     done: import_zod2.z.literal(true),
-     eval_count: import_zod2.z.number(),
--    eval_duration: import_zod2.z.number(),
-+    eval_duration: import_zod2.z.number().optional(),
-     load_duration: import_zod2.z.number().optional(),
-     model: import_zod2.z.string(),
-     prompt_eval_count: import_zod2.z.number().optional(),
+     role: import_zod2.z.string(),
++    thinking: import_zod2.z.string().optional(),
+     tool_calls: import_zod2.z.array(
+       import_zod2.z.object({
+         function: import_zod2.z.object({
+@@ -686,7 +697,8 @@ var ollamaChatStreamChunkSchema = import_zod2.z.discriminatedUnion("done", [
+     done: import_zod2.z.literal(false),
+     message: import_zod2.z.object({
+       content: import_zod2.z.string(),
+-      role: import_zod2.z.string()
++      role: import_zod2.z.string(),
++      thinking: import_zod2.z.string().optional()
+     }),
+     model: import_zod2.z.string()
+   }),
 diff --git a/node_modules/ollama-ai-provider/dist/index.mjs b/node_modules/ollama-ai-provider/dist/index.mjs
 index 3a18622..61b73dd 100644
 --- a/node_modules/ollama-ai-provider/dist/index.mjs
 +++ b/node_modules/ollama-ai-provider/dist/index.mjs
-@@ -645,7 +645,7 @@ var ollamaChatResponseSchema = z2.object({
-   done: z2.literal(true),
-   done_reason: z2.string().optional().nullable(),
-   eval_count: z2.number(),
--  eval_duration: z2.number(),
-+  eval_duration: z2.number().optional(),
-   load_duration: z2.number().optional(),
+@@ -590,6 +590,7 @@ var OllamaChatLanguageModel = class {
+       tools,
+       type
+     });
++    let isInThinking = false;
+     let finishReason = "other";
+     let usage = {
+       completionTokens: Number.NaN,
+@@ -627,11 +628,20 @@ var OllamaChatLanguageModel = class {
+                 return;
+               }
+             }
+-            if (value.message.content !== null) {
+-              controller.enqueue({
+-                textDelta: value.message.content,
+-                type: "text-delta"
+-              });
++            if (value.message.thinking) {
++              if (!isInThinking) {
++                isInThinking = true;
++                controller.enqueue({ textDelta: "<think>", type: "text-delta" });
++              }
++              controller.enqueue({ textDelta: value.message.thinking, type: "text-delta" });
++            } else {
++              if (isInThinking) {
++                isInThinking = false;
++                controller.enqueue({ textDelta: "《/think》", type: "text-delta" });
++              }
++              if (value.message.content) {
++                controller.enqueue({ textDelta: value.message.content, type: "text-delta" });
++              }
+             }
+           }
+         })
+@@ -648,6 +658,7 @@ var ollamaChatResponseSchema = z2.object({
    message: z2.object({
      content: z2.string(),
-@@ -679,7 +679,7 @@ var ollamaChatStreamChunkSchema = z2.discriminatedUnion("done", [
-     created_at: z2.string(),
-     done: z2.literal(true),
-     eval_count: z2.number(),
--    eval_duration: z2.number(),
-+    eval_duration: z2.number().optional(),
-     load_duration: z2.number().optional(),
-     model: z2.string(),
-     prompt_eval_count: z2.number().optional(),
+     role: z2.string(),
++    thinking: z2.string().optional(),
+     tool_calls: z2.array(
+       z2.object({
+         function: z2.object({
+@@ -671,7 +682,8 @@ var ollamaChatStreamChunkSchema = z2.discriminatedUnion("done", [
+     done: z2.literal(false),
+     message: z2.object({
+       content: z2.string(),
+-      role: z2.string()
++      role: z2.string(),
++      thinking: z2.string().optional()
+     }),
+     model: z2.string()
+   }),

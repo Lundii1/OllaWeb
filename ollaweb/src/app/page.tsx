@@ -1,14 +1,20 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import Link from "next/link";
 import { ImagePlus } from "lucide-react";
 import { CouncilSelector } from "./components/council-selector";
 import { CouncilResponse } from "./components/council-response";
 import { AVAILABLE_MODELS, DEFAULT_COUNCIL_MODELS } from "../lib/types";
 import type { ChatMode, CouncilState, CouncilEvent, IndividualResponse, Message, Conversation } from "../lib/types";
 import { ChatHistory } from "./components/chat-history";
-import { Meteors } from "./components/meteors";
+import {
+  AppFooter,
+  AppHeader,
+  AppMain,
+  AppShell,
+  AppSidebar,
+  StatusToast,
+} from "./components/app-shell";
 import { Persona } from "./components/persona";
 import type { PersonaState } from "./components/persona";
 import { Reasoning, ReasoningTrigger, ReasoningContent } from "@/components/ai/reasoning";
@@ -16,28 +22,6 @@ import { MarkdownMessage } from "./components/markdown-message";
 import { listConversations, getConversation, saveConversation, deleteConversation as deleteConvo, generateTitle, getSavedCouncilConfig, setSavedCouncilConfig } from "../lib/conversation-storage";
 import { applyCouncilEvent, createCouncilResult } from "../lib/council-result";
 import { splitChatContent } from "../lib/chat-content";
-
-function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={`size-[18px] transition-transform ${collapsed ? '' : 'rotate-180'}`}
-      aria-hidden="true"
-    >
-      <path
-        d="M6 2V14M5.2 2H10.8C11.9201 2 12.4802 2 12.908 2.21799C13.2843 2.40973 13.5903 2.71569 13.782 3.09202C14 3.51984 14 4.0799 14 5.2V10.8C14 11.9201 14 12.4802 13.782 12.908C13.5903 13.2843 13.2843 13.5903 12.908 13.782C12.4802 14 11.9201 14 10.8 14H5.2C4.07989 14 3.51984 14 3.09202 13.782C2.71569 13.5903 2.40973 13.2843 2.21799 12.908C2 12.4802 2 11.9201 2 10.8V5.2C2 4.07989 2 3.51984 2.21799 3.09202C2.40973 2.71569 2.71569 2.40973 3.09202 2.21799C3.51984 2 4.0799 2 5.2 2Z"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.33"
-      />
-    </svg>
-  );
-}
 
 export default function Chat() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -717,99 +701,52 @@ export default function Chat() {
   };
 
   return (
-    <Meteors>
-      <div className="flex h-full text-foreground">
-        {/* Install status toast (non-blocking) */}
-        {isInstalling && (
-          <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-black/80 backdrop-blur-md border border-white/10 rounded-lg px-4 py-2 shadow-lg">
-            <p className="text-muted-foreground text-sm whitespace-pre-wrap">{installMessage}</p>
-          </div>
-        )}
+    <AppShell>
+      {isInstalling && <StatusToast>{installMessage}</StatusToast>}
 
-        {/* Sidebar */}
-        {sidebarOpen ? (
-          <aside className="w-64 shrink-0 bg-black/60 backdrop-blur-md border-r border-white/10 flex flex-col">
-            <div className="flex items-center gap-2 p-3 border-b border-white/10">
-              <button
-                onClick={handleNewChat}
-                className="min-w-0 flex-1 px-3 py-2 text-sm font-medium rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
-              >
-                + New Chat
-              </button>
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(false)}
-                aria-label="Hide conversations"
-                title="Hide conversations"
-                className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
-              >
-                <SidebarToggleIcon collapsed={false} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <ChatHistory
-                conversations={savedConversations}
-                currentConversationId={currentConversationId}
-                isOpen={sidebarOpen}
-                onToggle={() => setSidebarOpen(open => !open)}
-                onSelect={handleSelectConversation}
-                onDelete={handleDeleteConversation}
-                onNewChat={handleNewChat}
-              />
-            </div>
-            <div className="p-3 border-t border-white/10">
-              <nav className="flex gap-2">
-                <span className="px-3 py-1.5 text-sm font-medium rounded-md bg-white/10 text-foreground">
-                  Chat
-                </span>
-                <Link href="/finance" className="px-3 py-1.5 text-sm font-medium rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground no-underline transition-colors">
-                  Finance
-                </Link>
-                <Link href="/resume" className="px-3 py-1.5 text-sm font-medium rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground no-underline transition-colors">
-                  Resume
-                </Link>
-              </nav>
-            </div>
-          </aside>
-        ) : (
-          <aside className="w-12 shrink-0 bg-black/60 backdrop-blur-md border-r border-white/10 flex flex-col items-center">
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Show conversations"
-              title="Show conversations"
-              className="mt-3 inline-flex size-9 items-center justify-center rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
-            >
-              <SidebarToggleIcon collapsed />
-            </button>
-          </aside>
-        )}
+      <AppSidebar
+        open={sidebarOpen}
+        onOpenChange={setSidebarOpen}
+        currentPage="chat"
+        expandedLabel="Hide conversations"
+        collapsedLabel="Show conversations"
+        top={
+          <button
+            onClick={handleNewChat}
+            className="w-full min-w-0 rounded-lg border border-white/10 px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+          >
+            + New Chat
+          </button>
+        }
+      >
+        <ChatHistory
+          conversations={savedConversations}
+          currentConversationId={currentConversationId}
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(open => !open)}
+          onSelect={handleSelectConversation}
+          onDelete={handleDeleteConversation}
+          onNewChat={handleNewChat}
+        />
+      </AppSidebar>
 
-        {/* Main area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <header className="shrink-0 bg-black/40 backdrop-blur-sm border-b border-white/10 z-10">
-            <div className="flex items-center justify-between px-4 py-2">
-              <h1 className="flex items-center gap-1 text-lg font-semibold tracking-normal" aria-label="voltaire">
-                <span className="text-white/35">[</span>
-                <span className="bg-gradient-to-r from-cyan-300 via-fuchsia-300 to-amber-200 bg-clip-text text-transparent drop-shadow-[0_0_16px_rgba(34,211,238,0.28)]">
-                  voltaire
-                </span>
-                <span className="text-white/35">]</span>
-              </h1>
-              <CouncilSelector
-                chatMode={chatMode}
-                onModeChange={handleModeChange}
-                singleModel={model}
-                onSingleModelChange={setModel}
-                councilModels={councilModels}
-                onCouncilModelsChange={setCouncilModels}
-                moderatorIndex={moderatorIndex}
-                onModeratorIndexChange={setModeratorIndex}
-                debateEnabled={debateEnabled}
-                onDebateEnabledChange={setDebateEnabled}
-              />
-            </div>
-          </header>
+      <AppMain>
+        <AppHeader
+          actions={
+            <CouncilSelector
+              chatMode={chatMode}
+              onModeChange={handleModeChange}
+              singleModel={model}
+              onSingleModelChange={setModel}
+              councilModels={councilModels}
+              onCouncilModelsChange={setCouncilModels}
+              moderatorIndex={moderatorIndex}
+              onModeratorIndexChange={setModeratorIndex}
+              debateEnabled={debateEnabled}
+              onDebateEnabledChange={setDebateEnabled}
+            />
+          }
+        />
 
           <main className="flex-1 overflow-y-auto p-4">
             {messages.length === 0 ? (
@@ -873,8 +810,7 @@ export default function Chat() {
             )}
           </main>
 
-          <footer className="shrink-0 border-t border-white/10 bg-black/40 backdrop-blur-sm">
-            <div className="max-w-3xl mx-auto p-3">
+          <AppFooter>
               {imagePreview && (
                 <div className="flex justify-center mb-2">
                   <img
@@ -957,10 +893,8 @@ export default function Chat() {
                   </button>
                 )}
               </form>
-            </div>
-          </footer>
-        </div>
-      </div>
-    </Meteors>
+          </AppFooter>
+      </AppMain>
+    </AppShell>
   );
 }

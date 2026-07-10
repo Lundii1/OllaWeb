@@ -19,6 +19,8 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
     if (!containerRef.current || data.length === 0) return;
 
     let cancelled = false;
+    let chartInstance: any = null;
+    let resizeObserver: ResizeObserver | null = null;
 
     (async () => {
       const lc = await import('lightweight-charts');
@@ -37,33 +39,33 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
         height: containerRef.current.clientHeight,
         layout: {
           background: { color: 'transparent' } as any,
-          textColor: '#9ca3af',
-          fontFamily: "var(--font-inter), sans-serif",
+          textColor: '#b4b4b4',
+          fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         },
         grid: {
-          vertLines: { color: '#1f1f1f' },
-          horzLines: { color: '#1f1f1f' },
+          vertLines: { color: 'rgba(255,255,255,0.05)' },
+          horzLines: { color: 'rgba(255,255,255,0.05)' },
         },
         crosshair: {
           vertLine: { 
-            color: '#ffffff', 
-            labelBackgroundColor: '#333333',
+            color: 'rgba(255,255,255,0.35)',
+            labelBackgroundColor: '#2f2f2f',
             width: 1,
             style: lc.LineStyle.SparseDotted,
           },
           horzLine: { 
-            color: '#ffffff', 
-            labelBackgroundColor: '#333333',
+            color: 'rgba(255,255,255,0.35)',
+            labelBackgroundColor: '#2f2f2f',
             width: 1,
             style: lc.LineStyle.SparseDotted,
           },
         },
         timeScale: {
-          borderColor: '#333333',
+          borderColor: 'rgba(255,255,255,0.1)',
           timeVisible: isIntraday,
         },
         rightPriceScale: {
-          borderColor: '#333333',
+          borderColor: 'rgba(255,255,255,0.1)',
         },
       });
 
@@ -74,7 +76,7 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
         // Comparison mode: normalize to % change
         const basePrice = data[0].close;
         const mainSeries = chart.addSeries(lc.LineSeries, {
-          color: '#39ff14',
+          color: '#67e8f9',
           lineWidth: 2,
           priceFormat: { type: 'custom', formatter: (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` },
         });
@@ -104,7 +106,7 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
         // Standard chart
         if (isIntraday) {
           const series = chart.addSeries(lc.LineSeries, {
-            color: '#39ff14',
+            color: '#67e8f9',
             lineWidth: 2,
           });
           series.setData(
@@ -112,12 +114,12 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
           );
         } else {
           const series = chart.addSeries(lc.CandlestickSeries, {
-            upColor: '#39ff14',
-            downColor: '#ff3333',
-            borderUpColor: '#39ff14',
-            borderDownColor: '#ff3333',
-            wickUpColor: '#39ff14',
-            wickDownColor: '#ff3333',
+            upColor: '#34d399',
+            downColor: '#f87171',
+            borderUpColor: '#34d399',
+            borderDownColor: '#f87171',
+            wickUpColor: '#34d399',
+            wickDownColor: '#f87171',
           });
           series.setData(
             data.map(d => ({
@@ -195,9 +197,8 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
             const rsiSeries = chart.addSeries(lc.LineSeries, {
               color: '#a855f7', lineWidth: 1,
               lastValueVisible: true, priceLineVisible: false,
-              pane: 1,
               priceFormat: { type: 'custom', formatter: (v: number) => v.toFixed(1) },
-            } as any);
+            } as any, 1);
             rsiSeries.setData(
               rsiValues.map((v, i) => v != null ? { time: times[i] as any, value: v } : null)
                 .filter((d): d is { time: any; value: number } => d != null)
@@ -206,14 +207,14 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
               .map((v, i) => v != null ? times[i] : null)
               .filter((t): t is number => t != null);
             const ob70 = chart.addSeries(lc.LineSeries, {
-              color: '#ff333366', lineWidth: 1, lineStyle: 2,
-              lastValueVisible: false, priceLineVisible: false, pane: 1,
-            } as any);
+              color: '#f8717166', lineWidth: 1, lineStyle: 2,
+              lastValueVisible: false, priceLineVisible: false,
+            } as any, 1);
             ob70.setData(rsiTimestamps.map(t => ({ time: t as any, value: 70 })));
             const os30 = chart.addSeries(lc.LineSeries, {
-              color: '#39ff1466', lineWidth: 1, lineStyle: 2,
-              lastValueVisible: false, priceLineVisible: false, pane: 1,
-            } as any);
+              color: '#34d39966', lineWidth: 1, lineStyle: 2,
+              lastValueVisible: false, priceLineVisible: false,
+            } as any, 1);
             os30.setData(rsiTimestamps.map(t => ({ time: t as any, value: 30 })));
           }
 
@@ -222,27 +223,27 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
             const paneIdx = indicators.rsi ? 2 : 1;
             const macdSeries = chart.addSeries(lc.LineSeries, {
               color: '#00d4ff', lineWidth: 1,
-              lastValueVisible: false, priceLineVisible: false, pane: paneIdx,
-            } as any);
+              lastValueVisible: false, priceLineVisible: false,
+            } as any, paneIdx);
             macdSeries.setData(
               macdData.macd.map((v, i) => v != null ? { time: times[i] as any, value: v } : null)
                 .filter((d): d is { time: any; value: number } => d != null)
             );
             const signalSeries = chart.addSeries(lc.LineSeries, {
               color: '#ffb000', lineWidth: 1,
-              lastValueVisible: false, priceLineVisible: false, pane: paneIdx,
-            } as any);
+              lastValueVisible: false, priceLineVisible: false,
+            } as any, paneIdx);
             signalSeries.setData(
               macdData.signal.map((v, i) => v != null ? { time: times[i] as any, value: v } : null)
                 .filter((d): d is { time: any; value: number } => d != null)
             );
             const histSeries = chart.addSeries(lc.HistogramSeries, {
-              lastValueVisible: false, priceLineVisible: false, pane: paneIdx,
-            } as any);
+              lastValueVisible: false, priceLineVisible: false,
+            } as any, paneIdx);
             histSeries.setData(
               macdData.histogram.map((v, i) => v != null ? {
                 time: times[i] as any, value: v,
-                color: v >= 0 ? '#39ff1488' : '#ff333388',
+                color: v >= 0 ? '#34d39988' : '#f8717188',
               } : null)
                 .filter((d): d is { time: any; value: number; color: string } => d != null)
             );
@@ -251,9 +252,10 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
       }
 
       chart.timeScale().fitContent();
+      chartInstance = chart;
       chartRef.current = chart;
 
-      const observer = new ResizeObserver(() => {
+      resizeObserver = new ResizeObserver(() => {
         if (containerRef.current && chartRef.current) {
           chartRef.current.applyOptions({
             width: containerRef.current.clientWidth,
@@ -261,13 +263,16 @@ export function StockChart({ data, period, indicators, comparisonData }: StockCh
           });
         }
       });
-      observer.observe(containerRef.current);
+      resizeObserver.observe(containerRef.current);
     })();
 
     return () => {
       cancelled = true;
-      if (chartRef.current) {
-        chartRef.current.remove();
+      resizeObserver?.disconnect();
+      if (chartInstance) {
+        chartInstance.remove();
+      }
+      if (chartRef.current === chartInstance) {
         chartRef.current = null;
       }
     };

@@ -1,258 +1,289 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import type { WatchlistItem } from '../../lib/types';
-import { 
-  TrendingUp, 
-  Search, 
-  X, 
-  ChevronLeft, 
-  ChevronRight,
-  Plus
-} from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Loader2, Plus, Search, TrendingUp, X } from "lucide-react";
+import type { WatchlistItem } from "../../lib/types";
+import { AppSidebar } from "./app-shell";
 
-const STORAGE_KEY = 'ollaweb-watchlist';
+const STORAGE_KEY = "ollaweb-watchlist";
 
 interface WatchlistProps {
   onSelectTicker: (ticker: string) => void;
   activeTicker: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  ticker: string;
+  onTickerChange: (value: string) => void;
+  onLoadTicker: () => void;
+  tickerLoading?: boolean;
 }
 
 function loadSavedTickers(): string[] {
-  if (typeof window === 'undefined') return [];
+  if (typeof window === "undefined") return [];
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    const parsed = saved ? JSON.parse(saved) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
   } catch {
     return [];
   }
 }
 
 function saveTickers(tickers: string[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tickers));
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(tickers));
+  } catch {
+    // Local storage may be unavailable in hardened browser contexts.
+  }
 }
 
-function formatVolume(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return n.toLocaleString();
+function formatWatchPrice(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
-export function Watchlist({ onSelectTicker, activeTicker, collapsed, onToggleCollapse }: WatchlistProps) {
+export function Watchlist({
+  onSelectTicker,
+  activeTicker,
+  collapsed,
+  onToggleCollapse,
+  ticker,
+  onTickerChange,
+  onLoadTicker,
+  tickerLoading = false,
+}: WatchlistProps) {
   const [tickers, setTickers] = useState<string[]>([]);
   const [items, setItems] = useState<WatchlistItem[]>([]);
-  const [addInput, setAddInput] = useState('');
+  const [addInput, setAddInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [status, setStatus] = useState("");
+  const requestControllerRef = useRef<AbortController | null>(null);
 
-  // Load saved tickers on mount
-  useEffect(() => {
-    setTickers(loadSavedTickers());
-  }, []);
+  useEffect(() => setTickers(loadSavedTickers()), []);
 
-  // Fetch quotes for all tickers
   const fetchQuotes = useCallback(async (tickerList: string[]) => {
+    requestControllerRef.current?.abort();
     if (tickerList.length === 0) {
       setItems([]);
       return;
     }
+
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     try {
-      const res = await fetch(`/api/finance/watchlist?tickers=${tickerList.join(',')}`);
-      if (res.ok) {
-        const data = await res.json();
-        setItems(data.items || []);
-      }
-    } catch (err) {
-      console.error('Watchlist fetch error:', err);
+      const response = await fetch(
+        `/api/finance/watchlist?tickers=${tickerList.join(",")}`,
+        { signal: controller.signal },
+      );
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Unable to refresh watchlist");
+      setItems(body.items || []);
+      setStatus("Watchlist refreshed");
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setStatus(error instanceof Error ? error.message : "Unable to refresh watchlist");
     }
   }, []);
 
-  // Fetch on tickers change
   useEffect(() => {
-    if (tickers.length > 0) {
-      setLoading(true);
-      fetchQuotes(tickers).finally(() => setLoading(false));
-    } else {
-      setItems([]);
-    }
-  }, [tickers, fetchQuotes]);
-
-  // Auto-refresh every 30s
-  useEffect(() => {
-    if (tickers.length > 0) {
-      intervalRef.current = setInterval(() => fetchQuotes(tickers), 30000);
-    }
+    setLoading(true);
+    void fetchQuotes(tickers).finally(() => setLoading(false));
+    const interval = window.setInterval(() => void fetchQuotes(tickers), 30000);
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      window.clearInterval(interval);
+      requestControllerRef.current?.abort();
     };
-  }, [tickers, fetchQuotes]);
+  }, [fetchQuotes, tickers]);
 
-  const addTicker = useCallback(() => {
-    const t = addInput.trim().toUpperCase();
-    if (!t || tickers.includes(t)) return;
-    const newTickers = [...tickers, t];
-    setTickers(newTickers);
-    saveTickers(newTickers);
-    setAddInput('');
-  }, [addInput, tickers]);
+  const addTicker = useCallback(
+    (event?: FormEvent) => {
+      event?.preventDefault();
+      const symbol = addInput.trim().toUpperCase();
+      if (!/^[A-Z0-9.\-^]{1,10}$/.test(symbol)) {
+        setStatus("Enter a valid ticker to track");
+        return;
+      }
+      if (tickers.includes(symbol)) {
+        setStatus(`${symbol} is already in your watchlist`);
+        return;
+      }
+      const updated = [...tickers, symbol];
+      setTickers(updated);
+      saveTickers(updated);
+      setAddInput("");
+      setStatus(`${symbol} added to watchlist`);
+    },
+    [addInput, tickers],
+  );
 
-  const removeTicker = useCallback((symbol: string) => {
-    const newTickers = tickers.filter(t => t !== symbol);
-    setTickers(newTickers);
-    saveTickers(newTickers);
-    setItems(prev => prev.filter(i => i.symbol !== symbol));
-  }, [tickers]);
+  const removeTicker = useCallback(
+    (symbol: string) => {
+      const updated = tickers.filter((item) => item !== symbol);
+      setTickers(updated);
+      setItems((current) => current.filter((item) => item.symbol !== symbol));
+      saveTickers(updated);
+      setStatus(`${symbol} removed from watchlist`);
+    },
+    [tickers],
+  );
 
   const loadTrending = useCallback(async () => {
     setLoading(true);
+    setStatus("Loading trending tickers");
     try {
-      const res = await fetch('/api/finance/watchlist?trending=true');
-      if (res.ok) {
-        const data = await res.json();
-        const trendingItems: WatchlistItem[] = data.items || [];
-        const newTickers = trendingItems.map(i => i.symbol);
-        setTickers(newTickers);
-        saveTickers(newTickers);
-        setItems(trendingItems);
+      const response = await fetch("/api/finance/watchlist?trending=true");
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Unable to load trending tickers");
+      const trendingItems: WatchlistItem[] = (body.items || []).filter(
+        (item: WatchlistItem) => /^[A-Z0-9.\-^]{1,10}$/.test(item.symbol),
+      );
+      if (trendingItems.length === 0) {
+        throw new Error("No trending tickers are available right now");
       }
-    } catch (err) {
-      console.error('Trending fetch error:', err);
+      const trendingTickers = trendingItems.map((item) => item.symbol);
+      setTickers(trendingTickers);
+      setItems(trendingItems);
+      saveTickers(trendingTickers);
+      setStatus("Trending tickers loaded");
+    } catch (error: unknown) {
+      setStatus(error instanceof Error ? error.message : "Unable to load trending tickers");
     } finally {
       setLoading(false);
     }
   }, []);
 
-  if (collapsed) {
-    return (
-      <div className="w-12 shrink-0 bg-[#171717] border-r border-[#333] flex flex-col items-center py-4 gap-4 z-20">
-        <button
-          onClick={onToggleCollapse}
-          className="p-1 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white transition-all"
-        >
-          <ChevronRight size={18} />
-        </button>
-        <div className="flex-1 flex items-center justify-center">
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em] [writing-mode:vertical-lr] rotate-180">
-            Market Watchlist
-          </span>
-        </div>
-      </div>
-    );
-  }
+  const handleSearchSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    onLoadTicker();
+  };
 
   return (
-    <div className="w-72 shrink-0 flex flex-col bg-[#171717] border-r border-[#333] z-20 overflow-hidden">
-      {/* Header */}
-      <div className="h-16 px-4 border-b border-[#333] flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-           <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20">
-              <TrendingUp size={16} className="text-blue-400" />
-           </div>
-           <span className="text-sm font-bold uppercase tracking-wider">Watchlist</span>
+    <AppSidebar
+      open={!collapsed}
+      onOpenChange={() => onToggleCollapse()}
+      currentPage="finance"
+      expandedLabel="Hide market watchlist"
+      collapsedLabel="Show market watchlist"
+      top={
+        <form onSubmit={handleSearchSubmit} className="flex min-w-0 items-center gap-1.5">
+          <label htmlFor="finance-ticker-search" className="sr-only">
+            Load a ticker
+          </label>
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <input
+              id="finance-ticker-search"
+              value={ticker}
+              onChange={(event) => onTickerChange(event.target.value.toUpperCase())}
+              placeholder="Load ticker"
+              maxLength={10}
+              className="w-full rounded-lg border border-white/10 bg-black/30 py-2 pl-8 pr-2 text-sm uppercase outline-none placeholder:normal-case placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-white/30"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!ticker.trim() || tickerLoading}
+            aria-label="Load ticker"
+            title="Load ticker"
+            className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+          >
+            {tickerLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Search className="size-4" aria-hidden="true" />}
+          </button>
+        </form>
+      }
+    >
+      <div className="border-b border-white/10 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="size-4 text-cyan-300" aria-hidden="true" />
+            <h2 className="text-sm font-medium">Watchlist</h2>
+          </div>
+          <span className="text-xs text-muted-foreground">{tickers.length}</span>
         </div>
+        <form onSubmit={addTicker} className="flex gap-1.5">
+          <label htmlFor="watchlist-add" className="sr-only">
+            Add ticker to watchlist
+          </label>
+          <input
+            id="watchlist-add"
+            value={addInput}
+            onChange={(event) => setAddInput(event.target.value.toUpperCase())}
+            placeholder="Track a ticker"
+            maxLength={10}
+            className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm uppercase outline-none placeholder:normal-case placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-white/30"
+          />
+          <button
+            type="submit"
+            disabled={!addInput.trim()}
+            aria-label="Add ticker to watchlist"
+            className="inline-flex size-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 transition-colors hover:bg-white/10 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+          >
+            <Plus className="size-4" aria-hidden="true" />
+          </button>
+        </form>
         <button
-          onClick={onToggleCollapse}
-          className="p-2 rounded-xl hover:bg-white/5 text-muted-foreground hover:text-white transition-all"
-        >
-          <ChevronLeft size={18} />
-        </button>
-      </div>
-
-      {/* Add ticker input */}
-      <div className="p-4 space-y-3 shrink-0 border-b border-[#333]">
-        <div className="relative group">
-           <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 group-focus-within:text-white/50 transition-colors">
-              <Search size={14} />
-           </div>
-           <input
-             type="text"
-             value={addInput}
-             onChange={e => setAddInput(e.target.value.toUpperCase())}
-             onKeyDown={e => e.key === 'Enter' && addTicker()}
-             placeholder="Search & Add Ticker..."
-             className="w-full bg-[#0a0a0a] border border-[#333] rounded-xl pl-9 pr-4 py-2 text-xs font-medium outline-none focus:ring-1 focus:ring-white/10 transition-all placeholder:text-muted-foreground/30"
-           />
-           {addInput && (
-             <button
-               onClick={addTicker}
-               className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-white text-black hover:bg-neutral-200 transition-all shadow-lg"
-             >
-                <Plus size={12} />
-             </button>
-           )}
-        </div>
-
-        <button
+          type="button"
           onClick={loadTrending}
           disabled={loading}
-          className="w-full h-9 flex items-center justify-center gap-2 bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl text-xs font-bold uppercase tracking-widest transition-all disabled:opacity-40"
+          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
         >
-          {loading ? (
-             <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-          ) : (
-             <TrendingUp size={14} />
-          )}
-          {loading ? 'Refining...' : 'Trending Now'}
+          {loading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <TrendingUp className="size-4" aria-hidden="true" />}
+          Trending now
         </button>
+        <p className="sr-only" aria-live="polite">{status}</p>
       </div>
 
-      {/* Ticker list */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {items.length > 0 ? (
-          <div className="p-2 space-y-1">
-            {items.map(item => (
-              <div
-                key={item.symbol}
-                onClick={() => onSelectTicker(item.symbol)}
-                className={`group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all border ${
-                  item.symbol === activeTicker 
-                    ? 'bg-[#212121] border-[#444] shadow-sm' 
-                    : 'bg-transparent border-transparent hover:bg-white/5'
-                }`}
-              >
-                <div className="flex-1 min-w-0">
-                   <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-bold tracking-tight">{item.symbol}</span>
-                      <span className="text-sm font-bold">${item.price.toFixed(2)}</span>
-                   </div>
-                   <div className="flex items-center justify-between">
-                      <span className="text-[10px] items-center font-medium text-muted-foreground uppercase truncate pr-4">
-                        {item.name || 'Stock Asset'}
-                      </span>
-                      <div className={`px-1.5 py-0.5 rounded-lg text-[10px] font-bold ${
-                        item.changePercent >= 0 
-                          ? 'bg-green-500/10 text-green-400' 
-                          : 'bg-red-500/10 text-red-400'
-                      }`}>
-                        {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
-                      </div>
-                   </div>
-                </div>
-                
+      {items.length > 0 ? (
+        <ul className="space-y-1 p-2" aria-label="Tracked tickers">
+          {items.map((item) => {
+            const positive = item.changePercent >= 0;
+            const active = item.symbol === activeTicker;
+            return (
+              <li key={item.symbol} className={`group flex items-center rounded-lg border transition-colors ${active ? "border-white/10 bg-white/10" : "border-transparent hover:bg-white/5"}`}>
                 <button
-                  onClick={e => { e.stopPropagation(); removeTicker(item.symbol); }}
-                  className="hidden group-hover:flex items-center justify-center w-6 h-6 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all"
+                  type="button"
+                  onClick={() => onSelectTicker(item.symbol)}
+                  aria-current={active ? "true" : undefined}
+                  className="min-w-0 flex-1 rounded-lg p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/30"
                 >
-                  <X size={12} />
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{item.symbol}</span>
+                    <span className="text-sm font-medium tabular-nums">{formatWatchPrice(item.price)}</span>
+                  </span>
+                  <span className="mt-1 flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-muted-foreground">{item.name || "Stock"}</span>
+                    <span className={`shrink-0 font-medium ${positive ? "text-emerald-400" : "text-red-400"}`}>
+                      {positive ? "▲" : "▼"} {positive ? "+" : ""}{item.changePercent.toFixed(2)}%
+                    </span>
+                  </span>
                 </button>
-              </div>
-            ))}
+                <button
+                  type="button"
+                  onClick={() => removeTicker(item.symbol)}
+                  aria-label={`Remove ${item.symbol} from watchlist`}
+                  className="mr-2 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-60 transition-colors hover:bg-red-500/10 hover:text-red-300 group-hover:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+                >
+                  <X className="size-3.5" aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
+          <div className="flex size-10 items-center justify-center rounded-full border border-dashed border-white/20">
+            <Plus className="size-4" aria-hidden="true" />
           </div>
-        ) : (
-          <div className="h-full flex flex-col items-center justify-center p-8 text-center opacity-30 gap-4">
-             <div className="w-12 h-12 rounded-full border-2 border-dashed border-muted-foreground flex items-center justify-center">
-                <Plus size={24} />
-             </div>
-             <div>
-                <p className="text-xs font-bold uppercase tracking-[0.2em]">List Empty</p>
-                <p className="text-[10px] font-medium leading-relaxed mt-1">Start tracking assets by adding them above</p>
-             </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">No tracked tickers</p>
+            <p className="mt-1 text-xs">Add one above or load today&apos;s trending list.</p>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </AppSidebar>
   );
 }

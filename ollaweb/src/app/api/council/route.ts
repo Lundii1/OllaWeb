@@ -6,7 +6,6 @@ import {
   installModel,
   imageToBase64,
   runWebSearch,
-  pingModel,
   withRetry,
   classifyError,
 } from '../../../lib/ollama-utils';
@@ -69,17 +68,13 @@ export async function POST(req: Request) {
       return new Response(JSON.stringify({ error: 'Exactly 3 models required' }), { status: 400 });
     }
 
-    // Ensure each model is available and warm up cloud models before streaming
+    // Ensure each model is available before streaming (warms up cloud models via checkModelInstalled)
     for (const model of models) {
       if (!await checkModelInstalled(model)) {
         if (!await installModel(model, (progress) => console.log(`Installing ${model}: ${progress}`))) {
           return new Response(JSON.stringify({ error: `Model ${model} installation failed` }), { status: 500 });
         }
       }
-    }
-
-    for (const model of models) {
-      await pingModel(model);
     }
 
     // Process image if present
@@ -155,44 +150,54 @@ export async function POST(req: Request) {
         };
 
         try {
-          // === Phase 0: Individual responses (sequential to avoid cloud provider conflicts) ===
+          // === Phase 0: Individual responses (parallel — cloud models run concurrently) ===
           const individualResults: string[] = ['', '', ''];
 
-          for (const [index, model] of models.entries()) {
-            emit({ event: 'individual_start', payload: { model, index } });
+          await Promise.allSettled(
+            models.map(async (model, index) => {
+              emit({ event: 'individual_start', payload: { model, index } });
 
-            try {
-              await withRetry(
-                async () => {
-                  const result = await streamText({
-                    model: ollama(model),
-                    messages: processedMessages,
-                    ...(webSystemPrompt ? { system: webSystemPrompt } : {}),
-                  });
+              let accumulatedText = '';
 
-                  for await (const chunk of result.textStream) {
-                    individualResults[index] += chunk;
-                    emit({
-                      event: 'individual_chunk',
-                      payload: { index, text: chunk },
-                    });
-                  }
-                },
-                { maxRetries: 1, delayMs: 3000, label: model }
-              );
+              try {
+                await Promise.race([
+                  withRetry(
+                    async () => {
+                      const result = await streamText({
+                        model: ollama(model),
+                        messages: processedMessages,
+                        ...(webSystemPrompt ? { system: webSystemPrompt } : {}),
+                      });
 
-              emit({
-                event: 'individual_complete',
-                payload: { index, model, fullText: individualResults[index] },
-              });
-            } catch (error) {
-              const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
-              emit({
-                event: 'individual_error',
-                payload: { index, model, error: classified.message, action: classified.action },
-              });
-            }
-          }
+                      for await (const chunk of result.textStream) {
+                        accumulatedText += chunk;
+                        emit({
+                          event: 'individual_chunk',
+                          payload: { index, text: chunk },
+                        });
+                      }
+                    },
+                    { maxRetries: 1, delayMs: 3000, label: model }
+                  ),
+                  new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('Model took too long to respond')), MODEL_TIMEOUT_MS)
+                  ),
+                ]);
+
+                individualResults[index] = accumulatedText;
+                emit({
+                  event: 'individual_complete',
+                  payload: { index, model, fullText: accumulatedText },
+                });
+              } catch (error) {
+                const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
+                emit({
+                  event: 'individual_error',
+                  payload: { index, model, error: classified.message, action: classified.action },
+                });
+              }
+            })
+          );
 
           // Filter successful responses
           const successfulResponses = models
@@ -284,28 +289,35 @@ export async function POST(req: Request) {
             `Original question: "${userQuestion}"\n\nThe following advisors have responded independently:\n\n${advisorBlocks}${debateClarifications}\n\nSynthesize these into a single answer. Focus on answering the original question, not on describing what each advisor said.`;
 
           try {
-            const synthesisResult = await streamText({
-              model: ollama(moderatorModel),
-              messages: [
-                {
-                  role: 'system' as const,
-                  content: SYNTHESIS_SYSTEM_PROMPT,
-                },
-                {
-                  role: 'user' as const,
-                  content: synthesisUserPrompt,
-                },
-              ],
-            });
+            await Promise.race([
+              (async () => {
+                const synthesisResult = await streamText({
+                  model: ollama(moderatorModel),
+                  messages: [
+                    {
+                      role: 'system' as const,
+                      content: SYNTHESIS_SYSTEM_PROMPT,
+                    },
+                    {
+                      role: 'user' as const,
+                      content: synthesisUserPrompt,
+                    },
+                  ],
+                });
 
-            let consensusText = '';
-            for await (const chunk of synthesisResult.textStream) {
-              consensusText += chunk;
-              emit({ event: 'synthesis_chunk', payload: { text: chunk } });
-            }
+                let consensusText = '';
+                for await (const chunk of synthesisResult.textStream) {
+                  consensusText += chunk;
+                  emit({ event: 'synthesis_chunk', payload: { text: chunk } });
+                }
 
-            const confidence = extractConfidence(consensusText);
-            emit({ event: 'synthesis_complete', payload: { fullText: consensusText, confidence } });
+                const confidence = extractConfidence(consensusText);
+                emit({ event: 'synthesis_complete', payload: { fullText: consensusText, confidence } });
+              })(),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Synthesis model took too long to respond')), SYNTHESIS_TIMEOUT_MS)
+              ),
+            ]);
           } catch (error) {
             const classified = classifyError(error instanceof Error ? error : new Error(String(error)));
             emit({
